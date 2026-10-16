@@ -111,10 +111,11 @@ if os.environ.get('KARTFRAME_VRTIMING_FRAMES') == '1':
         os.path.dirname(os.path.abspath(sys.argv[2])) if out else '.', 'vrframes.log')
     frames_out = open(path, 'w', buffering=1 << 16)
     frames_out.write(
-        '# vrframes v1 %s (KartFrame frame/tools/vrtiming.py, KARTFRAME_VRTIMING_FRAMES=1)\n'
+        '# vrframes v2 %s (KartFrame frame/tools/vrtiming.py, KARTFRAME_VRTIMING_FRAMES=1)\n'
         '# F idx sys_s presents mispresented dropped reproj_flags | ms after sys_s: waitgetposes posesready '
         'frameready updatestart updateend renderstart | ms: present_cpu waitforpresent_cpu idle_cpu comp_gpu '
-        'interval | vsyncs_ready vsyncs_to_first_view\n'
+        'interval | vsyncs_ready vsyncs_to_first_view | v2 (lane Y), ms: presubmit_gpu postsubmit_gpu totalrender_gpu '
+        'comp_render_cpu submit_frame\n'
         '# P mono_s raw_s boot_s since_vsync_s vsync_counter call_us newest_idx newest_sys_s '
         '(clocks read around GetTimeSinceLastVsync; mono = CLOCK_MONOTONIC = the game XRF m=/t= clock)\n'
         '# G first_idx last_idx (frames missed between polls)\n' % time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -140,13 +141,14 @@ def log_frames(buf, n):
         if frames_last is not None and k <= frames_last: continue
         if frames_last is not None and k > frames_last + 1: w('G %d %d\n' % (frames_last + 1, k - 1))
         frames_last = k
-        w('F %d %.6f %d %d %d %d %.3f %.3f %.3f %.3f %.3f %.3f %.2f %.2f %.2f %.2f %.2f %d %d\n' % (
+        w('F %d %.6f %d %d %d %d %.3f %.3f %.3f %.3f %.3f %.3f %.2f %.2f %.2f %.2f %.2f %d %d %.3f %.3f %.3f %.3f %.3f\n' % (
             k, f.m_flSystemTimeInSeconds, f.m_nNumFramePresents, f.m_nNumMisPresented, f.m_nNumDroppedFrames,
             f.m_nReprojectionFlags, f.m_flWaitGetPosesCalledMs, f.m_flNewPosesReadyMs, f.m_flNewFrameReadyMs,
             f.m_flCompositorUpdateStartMs, f.m_flCompositorUpdateEndMs, f.m_flCompositorRenderStartMs,
             f.m_flPresentCallCpuMs, f.m_flWaitForPresentCpuMs, f.m_flCompositorIdleCpuMs,
             f.m_flCompositorRenderGpuMs, f.m_flClientFrameIntervalMs, f.m_nNumVSyncsReadyForUse,
-            f.m_nNumVSyncsToFirstView))
+            f.m_nNumVSyncsToFirstView, f.m_flPreSubmitGpuMs, f.m_flPostSubmitGpuMs, f.m_flTotalRenderGpuMs,
+            f.m_flCompositorRenderCpuMs, f.m_flSubmitFrameMs))
 
 # Lane X: the grid for the game's end lock (KARTFRAME_END_PHASE).
 phase_state = dict(count=0, vsync=None, period=None, periods=[])

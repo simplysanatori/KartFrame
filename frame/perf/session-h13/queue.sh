@@ -19,6 +19,7 @@ OTHER=$(ls "$KFHOME/session.queue"/*.env 2> /dev/null | grep -v '/h13-' || true)
 [ -n "$OTHER" ] && echo "note: other queued launches come first or in between (name order): $OTHER"
 [ -f "$KFHOME/session.env" ] && echo "note: $KFHOME/session.env is waiting and goes before the queue"
 while IFS='|' read -r num name label args; do
+  [ "$num" -le 6 ] || continue  # cases 7-12 are session 21's
   F=$KFHOME/session.queue/h13-0$num-${name#*-}.env
   cat > "$F" << ENV
 # Headset session 13, launch $num of 6 (frame/perf/session-h13/README.md): xrprobe --replay case "$label"
