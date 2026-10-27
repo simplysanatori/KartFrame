@@ -62,7 +62,7 @@ def read_vrframes(path):
                 gaps += int(t[2]) - int(t[1]) + 1
     return F, P, gaps
 
-XRF = re.compile(r'XRF c=(\d+) w=\S+ e=(\S+) f=(\d) .* m=(\S+) r=(\S+) t=(\S+)')
+XRF = re.compile(r'XRF c=(\d+) w=\S+ e=(-?[\d.]+) f=(\d) .* m=([\d.]+) r=(-?[\d.]+) t=([\d.]+)')
 
 def read_game(path):
     rows, in_race, any_race = [], False, False
