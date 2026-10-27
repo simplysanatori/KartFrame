@@ -12,6 +12,11 @@ and the release notes. Twenty headset sessions have confirmed most of the build;
 
 - Packed stereo swapchain (`KARTFRAME_STEREO_PACKED=1`, the wrapper default since session 21) over full 3-lap races: clean in one short session each with and without the end lock; the A B A B against per-eye is queued (session h22). Also: no seam or foveation artefact was reported in session 21, but not looked for over a long race.
 
+- Eye sizes above 1728 (`render_scale`, `KARTFRAME_EYE_PX`, `KARTFRAME_RENDER_SCALE`): not measured in the mock or
+  the headset; at 2160 the packed image is 4320 wide, over SteamVR's 4096 maximum view rect (frame/perf/LANE_AG.md).
+- 90 Hz through `[vr] refresh_rate = 90` (the wrapper now passes it to SteamVR and the game) and the end lock
+  following a 90 Hz compositor grid: code read only, not run.
+
 ## Screen and menus
 
 - The laser pointer's dot on the 2D menu screen (the ray shows, the dot on the screen does not yet).
