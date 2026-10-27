@@ -1622,8 +1622,17 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
       .stencilReadMask = 1,
       .stencilWriteMask = 0,
   };
-  const auto blendState = to_blend_state(config.blendMode, config.blendFacSrc, config.blendFacDst, config.blendOp,
-                                         config.pixelFmt, config.dstAlpha);
+  auto blendState = to_blend_state(config.blendMode, config.blendFacSrc, config.blendFacDst, config.blendOp,
+                                   config.pixelFmt, config.dstAlpha);
+  if ((config.stereoStencil & gfx::stereo_replay::kCompositeSourceBlend) != 0) {
+    // An eye re-issuing the Time Trial ghost's draws at its composite: blended by the blend constant.
+    blendState.color = {.operation = wgpu::BlendOperation::Add,
+                        .srcFactor = wgpu::BlendFactor::Constant,
+                        .dstFactor = wgpu::BlendFactor::OneMinusConstant};
+    blendState.alpha = {.operation = wgpu::BlendOperation::Add,
+                        .srcFactor = wgpu::BlendFactor::One,
+                        .dstFactor = wgpu::BlendFactor::Zero};
+  }
   const std::array colorTargets{wgpu::ColorTargetState{
       .format = g_graphicsConfig.surfaceConfiguration.format,
       .blend = &blendState,

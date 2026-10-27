@@ -7,7 +7,7 @@ and the release notes. Twenty headset sessions have confirmed most of the build;
 
 - The item box (roulette) drawing in the right place during a race (the clip fix is in; the demo race has no HUD).
 - Full-view 2D effects (Blooper ink, the black of a respawn) across the whole view. Deferred.
-- The Time Trial ghost drawn in 3D (it is flat today, a known issue).
+- The Time Trial ghost drawn in 3D (lane AE: each eye draws the ghost kart itself; its strength, 0.5, is a guess).
 - Two and four player races at 120 Hz (heavier; measured in the mock only: 2p 113 sets/s, 6 % late).
 
 - Packed stereo swapchain (`KARTFRAME_STEREO_PACKED=1`, the wrapper default since session 21) over full 3-lap races: clean in one short session each with and without the end lock; the A B A B against per-eye is queued (session h22). Also: no seam or foveation artefact was reported in session 21, but not looked for over a long race.

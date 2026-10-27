@@ -744,6 +744,7 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
   // eligible for the virtual screen even when small and alpha blended.
   bool samplesRecentEfbCopy = false;
   bool samplesReducedEfbCopy = false;
+  const gfx::TextureRef* freshDepthCopy = nullptr;
   const u32 currentFrame = gfx::current_frame();
   for (int i = 0; i < info.sampledTextures.size(); ++i) {
     if (!info.sampledTextures.test(i)) {
@@ -753,13 +754,17 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
     // CHECK(tex, "unbound texture {}", i);
     if (tex.ref && tex.ref->is_recent_efb_copy(currentFrame)) {
       samplesRecentEfbCopy = true;
-      samplesReducedEfbCopy =
-          samplesReducedEfbCopy || tex.texObj.width() * 2 <= kEfbWidth || tex.texObj.height() * 2 <= kEfbHeight;
+      const bool reduced = tex.texObj.width() * 2 <= kEfbWidth || tex.texObj.height() * 2 <= kEfbHeight;
+      samplesReducedEfbCopy = samplesReducedEfbCopy || reduced;
+      if (!reduced && is_depth_format(tex.ref->gxFormat)) {
+        freshDepthCopy = tex.ref.get();
+      }
     }
     buf.append(texture_size_bias(tex));
   }
   const bool blends = g_gxState.blendMode == GX_BM_BLEND || g_gxState.blendMode == GX_BM_SUBTRACT;
 
+  const bool nativeEfbEffect = !perspective && samplesRecentEfbCopy && (samplesReducedEfbCopy || blends);
   const UniformReplayLayout replayLayout{
       .projectionOffset = static_cast<uint32_t>(projectionOffset),
       .positionOffset = static_cast<uint32_t>(positionOffset),
@@ -769,7 +774,8 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
       .normalMatrixCount = layout.nrmCount,
       .perspective = perspective,
       .indexedMatrices = info.indexAttr.test(GX_VA_PNMTXIDX),
-      .nativeEfbEffect = !perspective && samplesRecentEfbCopy && (samplesReducedEfbCopy || blends),
+      .nativeEfbEffect = nativeEfbEffect,
+      .compositeDepthCopy = nativeEfbEffect ? freshDepthCopy : nullptr,
       .uniformSize = info.structSize,
   };
 

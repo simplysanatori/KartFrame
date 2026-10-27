@@ -18,6 +18,11 @@ struct UniformReplayLayout {
   // rest of the native post-processing chain. It belongs to the rendered image,
   // not to the game's 2D layer, so it must stay where the game aimed it.
   bool nativeEfbEffect = false;
+  // For such an effect sampling a fresh, frame-sized depth copy: that copy. Mario Kart Wii's Time Trial ghost is
+  // drawn alone into the cleared EFB, copied out (colour and depth), and blended back over the race by one
+  // orthographic quad whose depth comes from this copy. An eye re-issues the ghost's own draws in that quad's place
+  // (gfx common.cpp, link_composite_source) instead of stamping the flat copy over its view.
+  const gfx::TextureRef* compositeDepthCopy = nullptr;
   float worldHudDepth = 0.0f;
   float worldHudAnchorX = 0.0f;
   float worldHudAnchorY = 0.0f;

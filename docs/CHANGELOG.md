@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Both eyes of a set now share one swapchain image by default (`KARTFRAME_STEREO_PACKED=1`, set by the launch wrapper; the game itself still defaults to off when run without it). In headset session 21 this was clean in a race with the end lock and also without it. `KARTFRAME_STEREO_PACKED=0` in `session.env` goes back to one swapchain per eye. Clean in one session each; the long A B A B comparison is pending.
+- The Time Trial ghost is drawn in 3D: each eye draws the ghost kart itself, from its own view, translucent and depth-tested against the course, where the game composited one flat picture of it into both eyes (seen doubled, one copy to each side). Adapted from iChris4/Wiicompiled_VR's composite-source fix for Quest (commits f2f7c50, e89988f). `KARTFRAME_GHOST_MONO=1` restores the flat ghost, `KARTFRAME_GHOST_ALPHA` (0.5) sets its strength. Not yet seen in the headset.
 - `frame/tools/phase.py` no longer stops on XRF lines with another log line glued on after `t=`.
 
 ## 0.9.0-alpha.1 (October 2026), pre-release

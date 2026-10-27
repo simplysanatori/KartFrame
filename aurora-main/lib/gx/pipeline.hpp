@@ -74,7 +74,7 @@ inline bool valid_pipeline_config(const PipelineConfig& config) noexcept {
   };
   const bool validSamples =
       config.msaaSamples == 1 || config.msaaSamples == 2 || config.msaaSamples == 4 || config.msaaSamples == 8;
-  return config.version == GXPipelineConfigVersion && validSamples && config.stereoStencil <= 1 && in_range(config.depthFunc, GX_ALWAYS) &&
+  return config.version == GXPipelineConfigVersion && validSamples && config.stereoStencil <= (1u | gfx::stereo_replay::kCompositeSourceBlend) && in_range(config.depthFunc, GX_ALWAYS) &&
          in_range(config.cullMode, GX_CULL_ALL) && in_range(config.blendMode, GX_BM_SUBTRACT) &&
          in_range(config.blendFacSrc, GX_BL_INVDSTALPHA) && in_range(config.blendFacDst, GX_BL_INVDSTALPHA) &&
          in_range(config.blendOp, GX_LO_SET) && in_range(config.pixelFmt, GX_PF_YUV420);

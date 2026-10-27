@@ -240,3 +240,12 @@ and up to 30 s for the file, then TERM, then KILL, then a pkill on anything writ
 panels.mkv. The log says "recorder stopped" or "recorder was never started"; a leftover
 panels.mkv.part is logged with its size and left for the owner. frame/test-wrapper-recorder.sh checks
 the four paths with a fake game and a fake framecorder (about 45 s).
+
+## Lane AE (the Time Trial ghost in stereo)
+Mario Kart Wii draws the ghost kart alone into the cleared EFB, copies colour and depth out, clears, draws the race
+and blends the copies back with one orthographic quad whose depth comes from the depth copy (a native framebuffer
+effect: one flat picture at the same place in both eyes, seen doubled). An eye now draws the ghost's perspective draws
+in that quad's place with its own view, blended with a constant alpha and depth-tested against its world
+(aurora common.cpp link_composite_source; gx.cpp: the stereoStencil bit 2 pipeline sibling). KARTFRAME_GHOST_MONO=1
+keeps the flat composite; KARTFRAME_GHOST_ALPHA=<0..1> (0.5) the ghost's strength. Log lines "Time Trial ghost: pass
+N ... is drawn by each eye" (once) or "... left flat (<reason>)" (up to 4). Details: frame/perf/LANE_AE.md.
