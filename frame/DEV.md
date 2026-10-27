@@ -233,6 +233,18 @@ prints the game's lines. Mock: mockrun.sh runs the helper against frame/tools/op
 KF_MOCKRUN_STUB_UPDATE_MS, KF_MOCKRUN_PHASE_SECONDS) with MOCK_XR_ALIGN_US. Analysis: frame/perf/LANE_X.md; next
 session: frame/perf/session-h20/README.md.
 
+## Lane AC switch (resident geometry, off by default)
+KARTFRAME_RESIDENT_GEOMETRY=0|off (default) | deindex | cache | 1|on|native, or Config.toml [video] resident_geometry
+(the environment wins); KARTFRAME_GEOMETRY_CACHE_MB / [video] geometry_cache_mb (32). deindex resolves indexed vertex
+attributes into flat aligned records as the FIFO is decoded; cache also keeps display lists that only draw resolved in a
+persistent GPU buffer (validated by the guest-RAM write tracking, cleared at race exit); native draws the cached lists
+through real vertex attributes. One startup line `resident geometry: mode= deindex= cache_mb= native_vertex_input= (source)`;
+while on, every 10 s `Resident geometry (10 s, N frames), a frame: ...` (lists from the cache, native, resolved, left in
+place and why, entries, MiB resident, retired/free blocks, volatile keys, staging high water, de-indexing stops, skipped
+draws). The first race with it on compiles the new pipeline variants (they are then in the user's pipeline cache).
+Test only: KARTFRAME_RESIDENT_GEOMETRY_TOGGLE=<start s>/<period s> switches the configured mode off and on live
+(logged), for same-scene image checks. Unit test: mkw_geometry_cache_tests. Design and numbers: frame/perf/LANE_AC.md.
+
 ## Wrapper recorder (KARTFRAME_RECORD)
 The recorder starts 8 s after the game and only if the game is still alive then; it runs in its own
 session (setsid) and the wrapper stops it on every exit path (game exit, Steam's TERM/INT/HUP): SIGINT
