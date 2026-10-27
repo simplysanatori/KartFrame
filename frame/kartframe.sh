@@ -26,6 +26,7 @@
 #                           the two eyes of the same set); 0 or off = one swapchain per eye (A/B, and the
 #                           old right-eye double image, see README)
 #   KARTFRAME_VRTIMING=0    no compositor timing log
+#   KARTFRAME_THERMLOG=0    no thermal.tsv (hottest thermal zone, CPU and GPU clocks once a second)
 #   KARTFRAME_SESSION_ENV_ONCE=1   (inside session.env) delete session.env after this launch
 #   KARTFRAME_KEEP_SESSIONS number of session folders kept (default 30)
 # Test hooks: KARTFRAME_VRCMD, KARTFRAME_STEAMVR_DIR, KARTFRAME_VRSETTINGS, KARTFRAME_VRTIMING_PY,
@@ -162,6 +163,29 @@ else
     log "no vrtiming.log (disabled, or vrtiming.py / libopenvr_api.so missing)"
 fi
 
+# Heat and clocks once a second (lane AJ): thermal.tsv = time, hottest zone (C) and its type, each CPU's
+# current clock (MHz, cpu0..), the GPU clock (MHz). Shell builtins only (no process per sample).
+THERM_PID=
+if [ "${KARTFRAME_THERMLOG:-1}" != 0 ]; then
+    (
+        zones=(/sys/class/thermal/thermal_zone*); types=()
+        for z in "${zones[@]}"; do t=?; read -r t < "$z/type" 2> /dev/null; types+=("$t"); done
+        cpus=(/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq)
+        gpu=$(ls -d /sys/class/devfreq/*.gpu 2> /dev/null | head -1)
+        echo "# time hot_C zone_type MHz:${cpus[*]//[!0-9 ]/} gpu_MHz"
+        while :; do
+            hot=-999999; ht=?; i=0
+            for z in "${zones[@]}"; do v=; read -r v < "$z/temp" 2> /dev/null
+                [ -n "$v" ] && [ "$v" -gt "$hot" ] 2> /dev/null && { hot=$v; ht=${types[$i]}; }; i=$((i + 1)); done
+            line="$EPOCHREALTIME $((hot / 1000)).$(((hot % 1000) / 100)) $ht"
+            for c in "${cpus[@]}"; do v=0; read -r v < "$c" 2> /dev/null; line+=" $((v / 1000))"; done
+            v=0; [ -n "$gpu" ] && read -r v < "$gpu/cur_freq" 2> /dev/null; line+=" $((v / 1000000))"
+            echo "$line"; sleep 1
+        done
+    ) > "$SESSION/thermal.tsv" 2> /dev/null &
+    THERM_PID=$!
+fi
+
 # Not exec: the wrapper stays to stop the logger and write the report. A signal for the wrapper
 # (Steam stopping the app) goes on to the game.
 # The headset is in use: development builds and headless GPU runs on this machine wait while this
@@ -241,6 +265,7 @@ rm -f "$HEADSET_MARK"
 stop_recorder
 log "game exited with status $rc"
 [ -n "$VRT_PID" ] && { kill "$VRT_PID" 2> /dev/null; wait "$VRT_PID" 2> /dev/null; }
+[ -n "$THERM_PID" ] && { kill "$THERM_PID" 2> /dev/null; wait "$THERM_PID" 2> /dev/null; }
 
 # The game's own log: the newest console.log of this session, else what it printed.
 GL=$(find "$STATE/Logs" -name console.log -newer "$SESSION/.start" 2> /dev/null | xargs -r ls -t 2> /dev/null | head -1)

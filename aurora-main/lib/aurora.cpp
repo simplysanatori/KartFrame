@@ -2801,10 +2801,27 @@ void seal_frame_locked(gfx::SealedFrame& sealedFrame, SealedFrameContext& ctx, u
   // encode phase reads only worker-private state.
   gfx::seal_frame(sealedFrame);
   ctx.retainStereo = gx::stereo_frame_interpolation_active() && gfx::has_late_stereo_replay(sealedFrame);
+  // A frame whose boundary is more than 1.5 VI intervals after the previous one (it missed a retrace) is
+  // shown without its previous frame. KARTFRAME_INTERP_MAX_MS=<ms> (lane AJ, display side only, default
+  // unset = 1.5 intervals) keeps the pair across gaps up to <ms> rounded up to whole intervals: 33 keeps it
+  // across one missed retrace (33.3 ms at 60 Hz), so a 45-55 fps game glides instead of stepping.
+  static const uint64_t interpMaxNanos = [] {
+    const char* env = std::getenv("KARTFRAME_INTERP_MAX_MS");
+    const double ms = env != nullptr ? std::atof(env) : 0.0;
+    if (ms > 0.0 && ms <= 100.0) {
+      Log.info("VR interpolation: previous frame kept across gaps up to {:.1f} ms, whole VI intervals (KARTFRAME_INTERP_MAX_MS)", ms);
+    }
+    return ms > 0.0 && ms <= 100.0 ? static_cast<uint64_t>(ms * 1e6) : uint64_t{0};
+  }();
+  uint64_t maxGapNanos = ctx.scheduleIntervalNanos * 3 / 2;
+  if (interpMaxNanos != 0 && ctx.scheduleIntervalNanos != 0) {
+    const uint64_t intervals = (interpMaxNanos + ctx.scheduleIntervalNanos - 1) / ctx.scheduleIntervalNanos;
+    maxGapNanos = (std::max)(maxGapNanos, intervals * ctx.scheduleIntervalNanos + ctx.scheduleIntervalNanos / 4);
+  }
   const bool continuous = ctx.retainStereo && g_retainedStereo.contentTag == contentTag &&
                           g_retainedStereo.interval != 0 && ctx.scheduleIntervalNanos != 0 &&
                           ctx.scheduleBaseNanos > g_retainedStereo.boundary &&
-                          ctx.scheduleBaseNanos - g_retainedStereo.boundary <= ctx.scheduleIntervalNanos * 3 / 2 &&
+                          ctx.scheduleBaseNanos - g_retainedStereo.boundary <= maxGapNanos &&
                           g_retainedStereo.anchor.active == sceneAnchor.active;
   const auto previousAnchor = g_retainedStereo.anchor;
   const auto previousLogicalFrame = g_retainedStereo.logicalFrame;

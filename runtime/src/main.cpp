@@ -1607,7 +1607,18 @@ int RuntimeMain(int argc, char** argv) {
         aurora_set_frame_worker_wait_callback(ServiceGuestTimingDuringAuroraFrameWait);
         GxGuestWrite::InstallAuroraHooks();
         ConfigureResidentGeometry();
-        GxThread::Configure(RuntimeConfigFile::GxThread());
+        {
+            // KARTFRAME_GX_THREAD=0|1 (lane AJ, A/B) overrides [video] gx_thread for one launch: the host
+            // side of GX (FIFO parsing, aurora's GX calls) leaves the game thread.
+            bool gxThread = RuntimeConfigFile::GxThread();
+            if (const char* env = std::getenv("KARTFRAME_GX_THREAD"); env != nullptr && (env[0] == '0' || env[0] == '1')) {
+                gxThread = env[0] == '1';
+            }
+            GxThread::Configure(gxThread);
+            RT_LOG(RT_TAG_RUNTIME) << "GX thread: " << (gxThread ? "requested" : "off") << " ([video] gx_thread"
+                                   << (std::getenv("KARTFRAME_GX_THREAD") != nullptr ? ", KARTFRAME_GX_THREAD" : "")
+                                   << ")" << std::endl;
+        }
         GxThread::SetWaitCallback(ServiceGuestTimingDuringAuroraFrameWait);
         GxThread::Start();
         if (GxThread::Enabled()) {
