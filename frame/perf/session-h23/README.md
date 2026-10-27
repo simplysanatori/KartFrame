@@ -89,7 +89,30 @@ frames a second at 1440, the eye size is not the cause, and the game thread's CP
 
 ## Mock calibration (2026-10-27, after the merge; first person, Luigi Circuit scripted Grand Prix, 90 s)
 
-MOCK_CALIBRATION
+`frame/perf/abgp.sh` (hudrace.sh's Luigi Circuit Grand Prix, first person, the four files' switches, `MOCK_XR_BUSY_MS=1`),
+two interleaved rounds per size, plus one run at 90 Hz (`MOCK_XR_HZ=90 KARTFRAME_REFRESH_HZ=90`). The eye size in the
+mock is `MOCK_XR_EYE` (SteamVR's recommended size); `KARTFRAME_EYE_PX` is the wrapper's request to SteamVR and does
+nothing in the mock. Race part from `pacing-parts.py`. All runs: 0 mock errors, 0 releases before the GPU finished.
+
+| run | eye, rate | sets/s | late % | repeats % | GPU ms/set p50 / p99 | encode p50 | game fps | hottest zone |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A1 | 1728, 120 | 120.5 | 0.03 | 0.10 | 5.12 / 5.83 | 2.19 | 59.8 | 86.5 C |
+| B1 | 1440, 120 | 120.6 | 0.01 | 0.10 | 4.09 / 4.68 | 2.19 | 59.8 | 82.9 C |
+| A2 | 1728, 120 | 120.1 | 0.03 | 0.23 | 5.35 / 6.10 | 2.62 | 50.8 (39-48 for 25 s) | 97.3 C |
+| B2 | 1440, 120 | 120.5 | 0.01 | 0.10 | 4.10 / 4.74 | 2.22 | 59.8 | 86.8 C |
+| C | 1728, 90 | 90.4 | 0.02 | 0.10 | 5.21 / 5.87 | 2.28 | 59.9 | 95.4 C |
+
+- 1440 costs 0.79 of 1728's GPU time a set (0.69 of the pixels). The headset's 1728 Grand Prix ran 6.85 ms p50 against
+  the mock's 5.1-5.35 (x1.3). So expect about 5.4 ms at 1440, 5.9 ms at 1536 and 6.9 ms at 1728 on the headset, against
+  8.33 ms a refresh at 120 Hz (the compositor takes about 0.8 of it) and 11.1 ms at 90 Hz.
+- 90 Hz in the mock: 90 sets a second; the end lock took the 90 Hz grid (`end phase: locked to the compositor grid`,
+  901 frames per 10 s, 0 on the fixed delay); interpolation weights "between" for 93-100 % of the sets; `display
+  refresh rate now 90 Hz`.
+- Run A2's slowdown has the headset's signature. For 25 s the game ran 39-48 frames a second while the hottest
+  thermal zone was at 93-97 C, with 13.8 ms of game-thread CPU per slow frame (A1: 11.1). Two more of 15 mock runs
+  that day dipped the same way (post-merge and pre-merge builds alike, both hot). The headset's Grand Prix had
+  14.5 ms and about 43 frames a second. CPU clock throttling under heat is the likely common cause; the headset logs
+  have no temperatures. A smaller eye size lowers the GPU's share of the heat, which is one more reason to try it.
 
 ## If the owner stops early
 
