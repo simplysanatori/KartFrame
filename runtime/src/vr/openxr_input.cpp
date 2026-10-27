@@ -263,15 +263,6 @@ std::string ItemThrowSetting(const char* env, const char* key) {
 
 } // namespace
 
-// LANE-AH-STUB: the held-item read (mkw_vr_item.h's contract) is lane AH's, in mkw_vr_first_person.cpp
-// and declared in mkw_vr_first_person.h. Until it is merged this weak fallback reports no item, so a
-// swing throws nothing (KARTFRAME_THROW_INJECT still plays throws); the linker drops it for the real
-// definition. Remove this block after the merge.
-HeldItem MkwVRFirstPersonGetHeldItem() noexcept;
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((weak)) HeldItem MkwVRFirstPersonGetHeldItem() noexcept { return {}; }
-#endif
-
 OpenXRInput::OpenXRInput(OpenXRLogCallback logger) : m_logger(std::move(logger)) {}
 
 OpenXRInput::~OpenXRInput() {
@@ -1263,9 +1254,15 @@ void OpenXRInput::LoadItemThrowSettings() {
         return end != text.c_str() && value >= low && value <= high ? value : fallback;
     };
     m_throw_enabled = flag(ItemThrowSetting("KARTFRAME_THROW", "cockpit_item_throw"), true);
-    const std::string hand = ItemThrowSetting("KARTFRAME_THROW_HAND", "cockpit_item_hand");
+    // The throw hand is the hand the item is drawn in (lane AH: KARTFRAME_COCKPIT_ITEM_HAND, else
+    // [vr] cockpit_item_hand, default right); KARTFRAME_THROW_HAND overrides it for the throw alone.
+    std::string hand = ItemThrowSetting("KARTFRAME_THROW_HAND", "cockpit_item_hand");
+    if (const char* item_hand = std::getenv("KARTFRAME_COCKPIT_ITEM_HAND");
+        item_hand != nullptr && *item_hand != '\0' && std::getenv("KARTFRAME_THROW_HAND") == nullptr) {
+        hand = item_hand;
+    }
     if (hand == "off") m_throw_enabled = false;
-    m_throw_hand = hand == "right" ? 1u : 0u;
+    m_throw_hand = hand == "left" ? 0u : 1u;
     // Quest-tuned defaults (kControllerTuning: 18 cm forward, 15 cm back within 120 ms).
     item_throw::Tuning tuning = item_throw::kControllerTuning;
     tuning.forward_travel =

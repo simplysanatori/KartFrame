@@ -27,7 +27,7 @@ Settings (env wins over Config.toml [vr]; read once when the controllers attach)
 | env | [vr] key | default |
 |---|---|---|
 | KARTFRAME_THROW=0/1 | cockpit_item_throw | true |
-| KARTFRAME_THROW_HAND=left/right/off | cockpit_item_hand | left |
+| KARTFRAME_THROW_HAND=left/right/off | cockpit_item_hand (KARTFRAME_COCKPIT_ITEM_HAND too) | right (the hand the item is drawn in; integration) |
 | KARTFRAME_THROW_FORWARD_CM (5..60) | item_throw_forward_cm | 18 |
 | KARTFRAME_THROW_BACK_CM (5..60) | item_throw_back_cm | 15 |
 | KARTFRAME_THROW_WINDOW_MS (40..250) | item_throw_window_ms | 120 |
