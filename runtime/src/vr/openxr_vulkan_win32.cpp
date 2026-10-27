@@ -499,6 +499,20 @@ bool GalaxyUsageSetting() {
     }();
     return galaxy;
 }
+// Lane AA (test only, default off): KARTFRAME_STEREO_PACKED=1 gives each eye set ONE swapchain, both eyes side by
+// side (eye N at x = N * eye width; 2 * eye wide, single mip, arraySize 1, the eyes' format and usage), acquired,
+// waited and released once per set, the projection views picking their halves with imageRect offsets. SteamVR on the
+// Frame takes each eye's latest released image when it reaches that eye, so per-eye swapchains released separately
+// can pair a right eye from one set with a left eye from another (the race's right-eye double image, sessions h19
+// and h20); with one image per set both eyes always come from the same set. The menus' screen quad uses the left
+// half. Aurora's sink reads the same switch (vulkan_win32_interop.cpp) and writes each eye into its half.
+bool StereoPackedSetting() {
+    static const bool packed = [] {
+        const char* env = std::getenv("KARTFRAME_STEREO_PACKED");
+        return env != nullptr && env[0] == '1';
+    }();
+    return packed;
+}
 bool FrameStampSetting() {
     static const bool stamp = [] {
         const char* env = std::getenv("KARTFRAME_FRAME_STAMP");
@@ -923,6 +937,12 @@ public:
                 << " instance, timeline semaphores " << (timeline_semaphores_ ? "enabled" : "not enabled")
                 << "; same-queue native eye copies";
         Log(OpenXRLogLevel::Info, message.str());
+        if (StereoPackedSetting()) {
+            std::ostringstream packed;
+            packed << "stereo packed: on (" << eye_swapchains_[0].width << 'x' << eye_swapchains_[0].height
+                   << ", one swapchain per set)";
+            Log(OpenXRLogLevel::Info, packed.str());
+        }
         return true;
     }
 
@@ -1011,7 +1031,15 @@ public:
 
         std::array<AuroraD3D12StereoTarget, kOpenXREyeCount> targets{};
         const diagnostics::Stopwatch acquire_timer;
+        // KARTFRAME_STEREO_PACKED: the pair's one packed image takes both eyes (or, in the menus, the screen in
+        // its left half); Aurora's sink sees the same image twice (or a target twice its eye's width) and
+        // writes each eye into its half.
+        const bool packed = eye_swapchains_[1].handle == XR_NULL_HANDLE;
         for (uint32_t eye = 0; eye < target_count; ++eye) {
+            if (packed && eye == 1 && !environment) {
+                targets[1] = targets[0];
+                continue;
+            }
             auto& swapchain = environment && eye == 1 ? env_swapchain_ : eye_swapchains_[eye];
             // A canceled set leaves its images acquired and waited (nothing wrote them); reuse them.
             if (!(swapchain.acquired && swapchain.waited) && !AcquireSwapchain(swapchain)) {
@@ -1048,7 +1076,9 @@ public:
             // Lane Q: GalaxyFrame's barrier before the set's first writes (eyes, environment, panel).
             std::array<VkImage, kOpenXREyeCount + 1> images{};
             uint32_t image_count = 0;
-            for (uint32_t eye = 0; eye < target_count; ++eye) images[image_count++] = static_cast<VkImage>(targets[eye].resource);
+            for (uint32_t eye = 0; eye < target_count; ++eye)
+                if (eye == 0 || targets[eye].resource != targets[0].resource)
+                    images[image_count++] = static_cast<VkImage>(targets[eye].resource);
             if (panel) images[image_count++] = static_cast<VkImage>(panel_target.resource);
             if (!cmds_.FirstWriteBarrier(images.data(), image_count) && !first_write_barrier_failed_) {
                 first_write_barrier_failed_ = true;
@@ -1730,7 +1760,10 @@ public:
             quad.subImage.swapchain = retained_swapchains_[0].handle;
             // Only the picture, not the black bands letterboxing it into the square eye-sized image
             // (as the Android backend): they framed the screen in black.
-            const uint32_t image_width = retained_swapchains_[0].width;
+            // A packed pair (KARTFRAME_STEREO_PACKED): the screen is in the left half.
+            const uint32_t image_width = retained_swapchains_[1].handle == XR_NULL_HANDLE
+                                             ? retained_swapchains_[0].width / kOpenXREyeCount
+                                             : retained_swapchains_[0].width;
             quad.subImage.imageRect = OpenXRVirtualScreenContentRect(
                 image_width, retained_swapchains_[0].height, frame.presentation.quad_content_aspect);
             quad.subImage.imageArrayIndex = 0;
@@ -1794,11 +1827,13 @@ public:
                 views[eye].pose.orientation = pose.orientation;
                 views[eye].pose.position = pose.position;
                 views[eye].fov = frame.xr_frame.views[eye].fov;
-                views[eye].subImage.swapchain = retained_swapchains_[eye].handle;
-                views[eye].subImage.imageRect = {
-                    {0, 0},
-                    {static_cast<int32_t>(retained_swapchains_[eye].width),
-                     static_cast<int32_t>(retained_swapchains_[eye].height)}};
+                // KARTFRAME_STEREO_PACKED: both views from the pair's one image, eye N at x = N * eye width.
+                const bool packed = retained_swapchains_[1].handle == XR_NULL_HANDLE;
+                const auto& image = retained_swapchains_[packed ? 0 : eye];
+                const int32_t width = static_cast<int32_t>(packed ? image.width / kOpenXREyeCount : image.width);
+                views[eye].subImage.swapchain = image.handle;
+                views[eye].subImage.imageRect = {{packed ? static_cast<int32_t>(eye) * width : 0, 0},
+                                                 {width, static_cast<int32_t>(image.height)}};
                 views[eye].subImage.imageArrayIndex = 0;
             }
             XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
@@ -2161,7 +2196,7 @@ public:
                       std::chrono::duration<double, std::milli>(wake_ - log_epoch_).count(),
                       std::chrono::duration<double, std::milli>(now - wake_).count(), fresh ? 1 : 0,
                       retained_swapchains_[0].pair_id, retained_swapchains_[0].released_index,
-                      retained_swapchains_[1].released_index, step, located, layer_count, log_angle_[0], log_angle_[1],
+                      retained_swapchains_[retained_swapchains_[1].handle == XR_NULL_HANDLE ? 0 : 1].released_index, step, located, layer_count, log_angle_[0], log_angle_[1],
                       std::chrono::duration<double, std::milli>(wake_.time_since_epoch()).count(), released,
                       MonotonicMs(active_frame_.predicted_display_time));
         Log(OpenXRLogLevel::Info, line);
@@ -2344,6 +2379,21 @@ private:
     }
 
     bool CreateSwapchainPair(std::array<EyeSwapchain, kOpenXREyeCount>& pair, uint32_t id) {
+        if (StereoPackedSetting()) {
+            // One image for both eyes, side by side (pair[1] stays empty: that marks a packed pair).
+            const auto& left = runtime_->ViewConfiguration()[0];
+            for (uint32_t eye = 0; eye < kOpenXREyeCount; ++eye) {
+                const auto& view = runtime_->ViewConfiguration()[eye];
+                if (view.render_width != left.render_width || view.render_height != left.render_height)
+                    return Fail("KARTFRAME_STEREO_PACKED needs both eyes the same size");
+                eye_width_[eye] = view.render_width;
+                eye_height_[eye] = view.render_height;
+            }
+            pair[0].pair_id = id;
+            pair[1] = {};
+            pair[1].pair_id = id;
+            return CreateSwapchain(pair[0], left.render_width * kOpenXREyeCount, left.render_height, "packed eyes", true);
+        }
         for (uint32_t eye = 0; eye < kOpenXREyeCount; ++eye) {
             pair[eye].pair_id = id;
             const auto& view = runtime_->ViewConfiguration()[eye];
