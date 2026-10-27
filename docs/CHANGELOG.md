@@ -4,6 +4,8 @@
 
 - Both eyes of a set now share one swapchain image by default (`KARTFRAME_STEREO_PACKED=1`, set by the launch wrapper; the game itself still defaults to off when run without it). In headset session 21 this was clean in a race with the end lock and also without it. `KARTFRAME_STEREO_PACKED=0` in `session.env` goes back to one swapchain per eye. Clean in one session each; the long A B A B comparison is pending.
 - `frame/tools/phase.py` no longer stops on XRF lines with another log line glued on after `t=`.
+- Compacted-layout shaders bake the position-matrix index as the constant 0 instead of a uniform load with a dynamic index (ported from iChris4/Wiicompiled_VR 236665c, GPL-3.0).
+- Projected reflections (Rainbow Road, Coconut Mall glass) no longer follow the head: texgen-only position matrices keep the recorded camera in eye replay (ported from iChris4/Wiicompiled_VR 4aac0ec, GPL-3.0).
 
 ## 0.9.0-alpha.1 (October 2026), pre-release
 
