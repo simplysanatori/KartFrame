@@ -90,5 +90,31 @@ identity.
 
 Images: cross-run pairs cannot prove identity in a race here: the game is not deterministic run to run (the CPU
 karts and the player's kart sit in different places at the same "scene position"): off vs on 34 % of pixels off
-by more than 2/255 (400 pairs), but on vs on (B1 against B2) 67 %, and off vs off matched only 8 pairs (1.8 %). The same-scene check (race paused, the mode toggled live, eye dumps in both modes) is described
-below.
+by more than 2/255 (400 pairs), but on vs on (B1 against B2) 67 %, and off vs off matched only 8 pairs (1.8 %).
+
+Same-scene check instead (one run, the race paused at 50 s, head still, the mode toggled live every 1.5 s with
+KARTFRAME_RESIDENT_GEOMETRY_TOGGLE=53/1.5, every released eye image dumped for 5 s across at least three toggles,
+1/8 scale): consecutive images differ by at most 0.15 % of pixels by more than 2/255 (median 0.002 %; 263 of 594
+left-eye and 295 of 594 right-eye consecutive pairs bit-identical at that scale), with no step at any toggle; the
+remaining differences are the paused menu's pulsing button. The cache served 130-285 lists a frame in that run
+(over 90 % native). So the picture with resident geometry on matches the picture with it off, within what a 1/8
+scale (linear-filtered) dump can show; a full-resolution pixel-exact comparison was not made.
+
+Soak (switch on, 310 s: menus, the attract race and its exit, a whole Grand Prix race at Luigi Circuit driven with A
+held to the result screen): 0 fatal / validation / staging messages, 0 draws skipped, de-indexing never stopped
+early; the cache settled at 192 entries, 1.4 of 32 MiB, 2 volatile keys (about one list a frame rewritten by the
+game, left to the plain path), 0 untracked, 0 no room, 85-266 lists a frame from the cache (over 95 % native);
+staging high water 1.2 MB of vertices (race start), under 0.4 MB of indices. Session: 120.3 sets/s, 0.1 % late, 78
+repeats. Game RSS grew 417 -> 630 MB over the first 150 s (loading) and stayed at 634-640 MB for the last 150 s.
+Eye dumps at 100, 200 and 290 s show the race and the result screen with no torn or misplaced geometry.
+
+## Untested
+
+- The headset: whether the small GPU saving shows there (SteamVR's compositor beside us, TU_DEBUG=sysmem, which the
+  wrapper sets and the mock runs above did not), and whether it touches the right-eye double image.
+- A course change in one session (race exit with a full cache, the next course at reused addresses): the attract
+  race's exit was exercised, a second Grand Prix race was not. Other courses' lists (Retro tracks are not in this
+  game) and multiplayer.
+- `deindex` and `cache` alone were not measured (only off against native).
+- Full-resolution pixel-exact identity (the same-scene check was at 1/8 scale).
+- gx_fifo_tests (MKW_BUILD_GX_TESTS, off by default) were given the new stubs but not built.
