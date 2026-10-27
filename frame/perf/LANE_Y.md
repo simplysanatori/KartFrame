@@ -1,6 +1,6 @@
 # Lane Y: test switches against the right-eye double image (verification)
 
-Both switches are default off and only for headset A/B sessions (frame/perf/session-h21/README.md).
+Both switches are default off and only for headset A/B sessions (frame/perf/session-h21-probes/README.md).
 
 ## What they do
 

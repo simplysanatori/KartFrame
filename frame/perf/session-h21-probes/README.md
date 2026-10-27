@@ -32,11 +32,11 @@ the target; the probe's GPU sum per frame is then 5.0 ms (mock: p50 5.00 / 5.15 
 cmake -S frame/tools/xrprobe -B ~/.cache/kf-xrprobe -G Ninja -DCMAKE_C_COMPILER=clang
 flock ~/Games/KartFrame/.build.lock cmake --build ~/.cache/kf-xrprobe
 cp frame/tools/vrtiming.py ~/Games/KartFrame/app/tools/   # v2 vrframes: + presubmit/postsubmit/totalrender GPU, compositor CPU, submit
-frame/perf/session-h21/queue.sh ~/.cache/kf-xrprobe/xrprobe ~/.cache/kf-laneT/dump-h13rec
+frame/perf/session-h21-probes/queue.sh ~/.cache/kf-xrprobe/xrprobe ~/.cache/kf-laneT/dump-h13rec
 ```
 
-queue.sh copies the binary and replay-case.sh into `$KARTFRAME_HOME/h21/` and writes `h21-01-load5.env` ..
-`h21-06-norec.env` into `$KARTFRAME_HOME/session.queue/` (as session 13's queue.sh: `KARTFRAME_EXE`, own session
+queue.sh copies the binary and replay-case.sh into `$KARTFRAME_HOME/h21/` and writes `h21p-01-load5.env` ..
+`h21p-06-norec.env` into `$KARTFRAME_HOME/session.queue/` (as session 13's queue.sh: `KARTFRAME_EXE`, own session
 folder, SteamVR's per-app settings, `KARTFRAME_SESSION_ENV_ONCE=1`). The recording of session 13 must still be at
 `~/.cache/kf-laneT/dump-h13rec` (1.2 GB). vrtiming.py v2 only appends columns; phase.py and LANE_Y's reading
 read v1 and v2.

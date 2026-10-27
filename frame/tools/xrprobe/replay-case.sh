@@ -1,7 +1,7 @@
 #!/bin/bash
 # Headset session 13 (frame/perf/session-h13/README.md): one xrprobe --replay case per launch.
 #   replay-case.sh [CASE]   CASE 1..12 (default $KF_REPLAY_CASE); extra arguments go to xrprobe
-# Cases 1-6: session 13. Cases 7-12: session 21 (frame/perf/session-h21/README.md), synthetic GPU load.
+# Cases 1-6: session 13. Cases 7-12: session 21 (frame/perf/session-h21-probes/README.md), synthetic GPU load.
 #   replay-case.sh --list   the cases, one "number|name|label|xrprobe arguments" line each
 # The KartFrame wrapper runs it as the game (KARTFRAME_EXE=<this script> in a session.queue file, written by
 # frame/perf/session-h13/queue.sh): the session folder, the panel recording (KARTFRAME_RECORD) and SteamVR's
