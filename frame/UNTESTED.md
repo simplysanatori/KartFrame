@@ -8,6 +8,9 @@ and the release notes. Twenty headset sessions have confirmed most of the build;
 - The item box (roulette) drawing in the right place during a race (the clip fix is in; the demo race has no HUD).
 - Full-view 2D effects (Blooper ink, the black of a respawn) across the whole view. Deferred.
 - The Time Trial ghost drawn in 3D (lane AE: each eye draws the ghost kart itself; its strength, 0.5, is a guess).
+- The held item in the hand (lane AH): mock only (the item test switch, log lines); not seen in an image or the headset;
+  its offset on the Frame's grip pose was tuned on Quest controllers.
+- Resident geometry (`KARTFRAME_RESIDENT_GEOMETRY=1`, off by default): mock only (-2 % GPU a set).
 - Two and four player races at 120 Hz (heavier; measured in the mock only: 2p 113 sets/s, 6 % late).
 
 - Packed stereo swapchain (`KARTFRAME_STEREO_PACKED=1`, the wrapper default since session 21) over full 3-lap races: clean in one short session each with and without the end lock; the A B A B against per-eye is queued (session h22). Also: no seam or foveation artefact was reported in session 21, but not looked for over a long race.
@@ -21,6 +24,14 @@ and the release notes. Twenty headset sessions have confirmed most of the build;
 
 - The laser pointer's dot on the 2D menu screen (the ray shows, the dot on the screen does not yet).
 - hud_distance_meters and hud_width_meters away from their defaults.
+
+- `KARTFRAME_MENU_CONTROLLERS=eyes|projected` (controllers in front of the screen; off by default): eyes relies on SteamVR
+  honouring a quad's eye visibility, unseen; the mock ran eyes without errors, no image was checked.
+
+## Controls
+
+- Throwing the held item with a swing (thresholds tuned on Quest controllers): mock only, with injected throws.
+- The game's rumble on the Frame controllers in gamepad mode (strength 0.7, the on/off duty mapping): mock log lines only.
 
 ## Install and first run
 
