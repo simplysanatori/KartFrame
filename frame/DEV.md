@@ -240,3 +240,12 @@ and up to 30 s for the file, then TERM, then KILL, then a pkill on anything writ
 panels.mkv. The log says "recorder stopped" or "recorder was never started"; a leftover
 panels.mkv.part is logged with its size and left for the owner. frame/test-wrapper-recorder.sh checks
 the four paths with a fake game and a fake framecorder (about 45 s).
+
+## Lane AF switch (controllers in front of the menu screen)
+KARTFRAME_MENU_CONTROLLERS=off|eyes|projected (default off: the environment layer under the screen's quad, which
+hides the controllers and the ray where they overlap the screen). eyes (needs KARTFRAME_STEREO_PACKED=1, else off):
+the screen's image goes into both halves of the packed pair and each half gets that eye's view of the controllers
+and rays drawn in (projected from the eye onto the screen's plane, only what is between the eye and the screen);
+two quads, XR_EYE_VISIBILITY_LEFT and _RIGHT, one half each. projected: no screen quad; the screen's image is drawn
+into the environment projection layer (one more resample: softer text). The environment-ready log line names the
+mode. Details and what to expect: frame/perf/LANE_AF.md.

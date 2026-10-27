@@ -657,6 +657,40 @@ wgpu::BindGroup stereo_eye_copy_bind_group(uint32_t eyeIndex) {
   return target.copyBindGroup;
 }
 
+// Lane AF, KARTFRAME_MENU_CONTROLLERS (read by the OpenXR backend as well): how the menus show the controllers and
+// the pointer's ray where they are in front of the screen. SteamVR on the Frame composites the environment
+// projection layer under the screen's quad whatever the order (H4.md), so by default (off) the quad hides them.
+// eyes: one screen quad per eye (the halves of the packed pair's image, KARTFRAME_STEREO_PACKED=1), each with the
+// controllers drawn in as that eye sees them through the screen. projected: no quad, the screen is drawn into the
+// environment projection layer (one more resample of the picture). frame/perf/LANE_AF.md.
+enum class MenuControllers { Off, Eyes, Projected };
+MenuControllers menu_controllers_setting() noexcept {
+  static const MenuControllers mode = [] {
+    const char* env = std::getenv("KARTFRAME_MENU_CONTROLLERS");
+    if (env != nullptr && std::strcmp(env, "eyes") == 0) return MenuControllers::Eyes;
+    if (env != nullptr && std::strcmp(env, "projected") == 0) return MenuControllers::Projected;
+    return MenuControllers::Off;
+  }();
+  return mode;
+}
+bool menu_stereo_packed() noexcept {
+  static const bool packed = [] {
+    const char* env = std::getenv("KARTFRAME_STEREO_PACKED");
+    return env != nullptr && env[0] == '1';
+  }();
+  return packed;
+}
+// Eyes mode for this packet: the menus with their environment target (both eyes side by side), whose eye target 0
+// is then the whole packed pair (the left eye's screen in its left half, the right eye's in its right half).
+bool menu_screen_eyes(const AuroraStereoFrame& frame) noexcept {
+  return menu_controllers_setting() == MenuControllers::Eyes && menu_stereo_packed() &&
+         frame.mode == AURORA_STEREO_FRAME_VIRTUAL_SCREEN && frame.ui.anchored && frame.window &&
+         frame.eyes[1].width == 2 * frame.eyes[0].width && frame.eyes[1].height == frame.eyes[0].height;
+}
+uint32_t stereo_target_width(const AuroraStereoFrame& frame, uint32_t eye) noexcept {
+  return eye == 0 && menu_screen_eyes(frame) ? 2 * frame.eyes[0].width : frame.eyes[eye].width;
+}
+
 void ensure_stereo_eye_target(uint32_t eyeIndex, uint32_t width, uint32_t height) {
   auto& target = g_stereoEyeTargets[eyeIndex];
   const uint32_t samples = webgpu::g_graphicsConfig.msaaSamples;
@@ -849,7 +883,7 @@ gfx::StereoReplayFrame make_stereo_replay_frame(const AuroraStereoFrame& input, 
                               : 1.f;
   replay.cockpit.unitsPerMeter = frameUnits;
   for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
-    ensure_stereo_eye_target(eye, input.eyes[eye].width, input.eyes[eye].height);
+    ensure_stereo_eye_target(eye, stereo_target_width(input, eye), input.eyes[eye].height);
     const auto& owned = g_stereoEyeTargets[eye];
     const auto& output = owned.output();
     auto& view = replay.eyes[eye];
@@ -1127,15 +1161,50 @@ void encode_menu_environment(wgpu::CommandEncoder& encoder, const webgpu::Presen
   } endMark{encoder};
   const auto& target = g_stereoEyeTargets[1].output();
   const uint32_t eyeWidth = target.size.width / AURORA_STEREO_EYE_COUNT;
+  // The pointer's marks into the screen's image first (each half of it in eyes mode): projected mode draws that
+  // image into the environment below.
+  const auto& screen = g_stereoEyeTargets[0].output();
+  const bool eyes = menu_screen_eyes(frame);
+  const uint32_t screenWidth = eyes ? screen.size.width / AURORA_STEREO_EYE_COUNT : screen.size.width;
+  for (uint32_t half = 0; half < (eyes ? AURORA_STEREO_EYE_COUNT : 1u); ++half) {
+    vrui::screen_marks(encoder, mono, frame, half * screenWidth, screenWidth);
+  }
+  wgpu::BindGroup screenBinding;
+  std::array<float, 4> screenUv{};
+  if (menu_controllers_setting() == MenuControllers::Projected && mono.size.width && mono.size.height &&
+      screen.size.width && screen.size.height) {
+    static WGPUTexture boundTexture = nullptr;
+    static wgpu::BindGroup binding;
+    if (boundTexture != screen.texture.Get() || !binding) {
+      binding = webgpu::create_copy_bind_group(screen);
+      boundTexture = screen.texture.Get();
+    }
+    screenBinding = binding;
+    const auto vp = webgpu::calculate_present_viewport(screen.size.width, screen.size.height, mono.size.width,
+                                                       mono.size.height);
+    screenUv = {vp.left / float(screen.size.width), vp.top / float(screen.size.height),
+                (vp.left + vp.width) / float(screen.size.width), (vp.top + vp.height) / float(screen.size.height)};
+  }
   for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
     const vrui::Environment env{.view = target.view, .x = eye * eyeWidth, .width = eyeWidth,
-                                .height = target.size.height, .clear = eye == 0};
+                                .height = target.size.height, .clear = eye == 0, .screen = screenBinding,
+                                .screenUv = screenUv};
     vrui::render(encoder, mono, frame, AuroraVRUiGuide{}, eye, &env);
+  }
+  // Eyes mode: each eye's controllers and rays into its half of the screen's image, where they are in front of it.
+  if (eyes && mono.size.width && mono.size.height) {
+    const auto vp = webgpu::calculate_present_viewport(screenWidth, screen.size.height, mono.size.width,
+                                                       mono.size.height);
+    for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
+      const vrui::ScreenComposite composite{.view = screen.view, .x = float(eye * screenWidth) + vp.left,
+                                            .y = vp.top, .width = vp.width, .height = vp.height};
+      vrui::render(encoder, mono, frame, AuroraVRUiGuide{}, eye, nullptr, &composite);
+    }
   }
 }
 
-void encode_virtual_screen_eye(wgpu::CommandEncoder& encoder, const webgpu::PresentSource& source, uint32_t eyeIndex) {
-  const auto& output = g_stereoEyeTargets[eyeIndex].output();
+void encode_virtual_screen_image(wgpu::CommandEncoder& encoder, const webgpu::PresentSource& source,
+                                 const webgpu::TextureWithSampler& output, const char* label) {
   const std::array attachments{
       wgpu::RenderPassColorAttachment{
           .view = output.view,
@@ -1145,7 +1214,7 @@ void encode_virtual_screen_eye(wgpu::CommandEncoder& encoder, const webgpu::Pres
       },
   };
   const wgpu::RenderPassDescriptor descriptor{
-      .label = eyeIndex == 0 ? "Virtual screen left eye" : "Virtual screen right eye",
+      .label = label,
       .colorAttachmentCount = attachments.size(),
       .colorAttachments = attachments.data(),
       .timestampWrites = gfx::gpu_timing_pass(gfx::GpuTimingCategory::VirtualScreen),
@@ -1161,6 +1230,39 @@ void encode_virtual_screen_eye(wgpu::CommandEncoder& encoder, const webgpu::Pres
       pass.Draw(3);
     }
     pass.End();
+  }
+}
+void encode_virtual_screen_eye(wgpu::CommandEncoder& encoder, const webgpu::PresentSource& source, uint32_t eyeIndex) {
+  encode_virtual_screen_image(encoder, source, g_stereoEyeTargets[eyeIndex].output(),
+                              eyeIndex == 0 ? "Virtual screen left eye" : "Virtual screen right eye");
+}
+
+// The menus with their environment layer (menu_environment_requested). Eye target 0: the screen's image (the
+// game's picture letterboxed, the settings panel drawn in); eye target 1: the room around it (encode_menu_environment).
+// Lane AF (KARTFRAME_MENU_CONTROLLERS, see menu_controllers_setting): eyes mode makes target 0 the packed pair, the
+// screen's image in each half, each half with the controllers and rays as that eye sees them through the screen;
+// projected mode draws target 0's picture into the environment instead of leaving its area transparent.
+void encode_menu_screen(wgpu::CommandEncoder& encoder, const webgpu::PresentSource& mono, const AuroraStereoFrame& frame) {
+  const auto& output = g_stereoEyeTargets[0].output();
+  if (!menu_screen_eyes(frame)) {
+    encode_virtual_screen_eye(encoder, mono, 0);
+    stereo_overlay::composite_flat(encoder, output.view, output.size, 0);
+    return;
+  }
+  // One eye's screen image (as the off mode's target 0), copied into both halves.
+  static webgpu::TextureWithSampler screen;
+  const uint32_t eyeWidth = output.size.width / AURORA_STEREO_EYE_COUNT;
+  if (!screen.texture || screen.size.width != eyeWidth || screen.size.height != output.size.height ||
+      screen.format != output.format) {
+    screen = webgpu::create_render_texture(eyeWidth, output.size.height, false);
+  }
+  encode_virtual_screen_image(encoder, mono, screen, "Virtual screen (menu eyes)");
+  stereo_overlay::composite_flat(encoder, screen.view, screen.size, 0);
+  for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
+    const wgpu::TexelCopyTextureInfo source{.texture = screen.texture};
+    const wgpu::TexelCopyTextureInfo destination{.texture = output.texture, .origin = {eye * eyeWidth, 0, 0}};
+    const wgpu::Extent3D size{eyeWidth, output.size.height, 1};
+    encoder.CopyTextureToTexture(&source, &destination, &size);
   }
 }
 
@@ -2515,16 +2617,10 @@ void run_retained_stereo_frame(gfx::SealedFrame& sealedFrame) noexcept {
     const webgpu::PresentSource mono{.bindGroup=image.bindGroup,.texture=image.texture.texture,
       .size=image.texture.size,.format=image.texture.format};
     for(uint32_t eye=0;eye<AURORA_STEREO_EYE_COUNT;++eye) {
-      ensure_stereo_eye_target(eye,input->eyes[eye].width,input->eyes[eye].height);
+      ensure_stereo_eye_target(eye,stereo_target_width(*input,eye),input->eyes[eye].height);
       if(menu_environment_requested(*input)) {
-        if(eye==0) {
-          encode_virtual_screen_eye(encoder,mono,0);
-          const auto& output=g_stereoEyeTargets[0].output();
-          stereo_overlay::composite_flat(encoder,output.view,output.size,0);
-        } else {
-          encode_menu_environment(encoder,mono,*input);
-          vrui::screen_marks(encoder,mono,*input);
-        }
+        if(eye==0) encode_menu_screen(encoder,mono,*input);
+        else encode_menu_environment(encoder,mono,*input);
       } else if(input->ui.anchored) {
         auto frame=*input;webgpu::PresentSource panel{};
         const bool guide=g_retainedMenuGuide.active && stereo_overlay::prepared_source(panel);
@@ -2927,11 +3023,9 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
       const auto& output = g_stereoEyeTargets[eye].output();
       if (ctx.stereoInput && menu_environment_requested(*ctx.stereoInput)) {
         if (eye == 0) {
-          encode_virtual_screen_eye(encoder, completedMono, 0);
-          stereo_overlay::composite_flat(encoder, output.view, output.size, 0);
+          encode_menu_screen(encoder, completedMono, *ctx.stereoInput);
         } else {
           encode_menu_environment(encoder, completedMono, *ctx.stereoInput);
-          vrui::screen_marks(encoder, completedMono, *ctx.stereoInput);
         }
       } else if (ctx.stereoInput && ctx.stereoInput->ui.anchored) {
         auto frame=*ctx.stereoInput;
