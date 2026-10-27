@@ -1,6 +1,7 @@
 // Stubs for renderer symbols the GX/FIFO/command_processor code references but that live in the
 // full renderer, so the test binary links without the WebGPU runtime.
 
+#include "../lib/gfx/geometry_buffer.hpp"
 #include "gx/gx.hpp"
 #include "gfx/clear.hpp"
 #include "gfx/common.hpp"
@@ -304,6 +305,15 @@ Range push_indices(const uint8_t* data, size_t length) {
 Range push_uniform(const uint8_t* data, size_t length) { return {}; }
 Range push_storage(const uint8_t* data, size_t length) { return {}; }
 StagingStats g_stagingStats;
+Range push_indices32(const uint32_t*, size_t) { return {}; }
+void set_gx_deindex_vertices(bool) noexcept {}
+bool get_gx_deindex_vertices() noexcept { return false; }
+void set_gx_native_vertex_input(bool) noexcept {}
+bool get_gx_native_vertex_input() noexcept { return false; }
+// The geometry buffer (geometry_buffer.cpp) is never created here: the cache stays off.
+uint64_t ensure_geometry_buffer() noexcept { return 0; }
+uint64_t geometry_buffer_capacity() noexcept { return 0; }
+bool queue_geometry_upload(uint32_t, const uint8_t*, uint32_t) { return false; }
 size_t vertex_staging_room() noexcept { return VertexBufferSize; }
 size_t index_staging_room() noexcept { return IndexBufferSize; }
 void staging_overflow_abort(size_t, size_t) noexcept { std::abort(); }

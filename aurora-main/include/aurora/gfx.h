@@ -117,6 +117,18 @@ bool aurora_get_stereo_single_pass_eyes();
 // whether this session has both.
 void aurora_set_stereo_foveation(uint32_t level);
 uint32_t aurora_get_stereo_foveation();
+
+// Resident geometry (KartFrame; ported from the iChris4/Wiicompiled_VR fork). All off by default; set before the
+// first frame (live changes apply at the next frame begin). deindex_vertices resolves indexed vertex attributes on
+// the CPU into flat, aligned records as the FIFO is decoded. geometry_cache_mb > 0 (needs deindex_vertices) keeps
+// display lists that only draw resolved in a persistent GPU buffer of that many MiB, validated by the guest-RAM write
+// tracking; the buffer is created at its first use. native_vertex_input (needs the cache) draws the cached lists
+// through the GPU's vertex-input stage instead of decoding their records in the vertex shader.
+void aurora_set_gx_deindex_vertices(bool enabled);
+void aurora_set_gx_geometry_cache_mb(uint32_t mb);
+void aurora_set_gx_native_vertex_input(bool enabled);
+// Asks for every cached list to go at the next frame begin (a race ends and its course goes away). Any thread.
+void aurora_request_geometry_cache_clear(void);
 bool aurora_stereo_foveation_available();
 
 // Places orthographic GX draws (menus, HUD, 2D overlays) on a fixed virtual

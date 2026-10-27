@@ -39,6 +39,9 @@ struct DrawData {
   // Diagnostics (KARTFRAME_LOG_2D_QUADS): blend | logic << 2 | texgens << 6 | tex0 width << 10 | height << 21 |
   // tex0 is an EFB copy << 32.
   uint64_t quadSignature = 0;
+  // The records are in the geometry buffer (gx/geometry_cache.hpp), the indices 32-bit and absolute into it: group 0
+  // binds that buffer and the index buffer switches format for the draw.
+  bool cachedGeometry = false;
 };
 
 constexpr uint32_t GXPipelineConfigVersion = 22;
@@ -89,9 +92,13 @@ struct DrawEncodeState {
   gfx::PipelineRef currentPipeline = UINTPTR_MAX;
   // The bind group currently occupying slot 2.
   WGPUBindGroup boundTextureBindGroup = nullptr;
-  // The pass-wide index buffer binding is established lazily by the first indexed draw; every draw then addresses it
-  // with firstIndex instead of a per-draw SetIndexBuffer.
-  bool indexBufferBound = false;
+  // The index buffer binding is established lazily by the first indexed draw and re-bound only when the index format
+  // changes (16-bit for the frame's draws, 32-bit for the geometry cache's); every draw addresses it with firstIndex
+  // instead of a per-draw SetIndexBuffer.
+  wgpu::IndexFormat indexFormat = wgpu::IndexFormat::Undefined;
+  // Whether group 0 currently binds the geometry cache's buffer rather than the frame's vertex buffer (the pass starts
+  // with the latter bound).
+  bool geometryBound = false;
 };
 
 void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, DrawEncodeState& state,

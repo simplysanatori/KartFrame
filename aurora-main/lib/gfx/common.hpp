@@ -590,6 +590,16 @@ static Range push_storage(const T& data) {
 Range push_texture_data(const uint8_t* data, size_t length, uint32_t bytesPerRow, uint32_t rowsPerImage);
 std::pair<ByteBuffer, Range> map_verts(size_t length);
 std::pair<ByteBuffer, Range> map_indices(size_t length);
+// 32-bit indices (the geometry cache's), 4-byte aligned in the same index staging.
+Range push_indices32(const uint32_t* data, size_t count);
+// GXState::deindexVertices for the next frames, latched at frame begin so a frame's draws agree (a change re-resolves
+// every pipeline, since the vertex layout is part of the shader config).
+void set_gx_deindex_vertices(bool value) noexcept;
+bool get_gx_deindex_vertices() noexcept;
+// GXState::nativeVertexInputRequested for the next frames: whether the geometry cache's lists may be drawn through
+// native vertex input (gx/native_vertex.hpp).
+void set_gx_native_vertex_input(bool value) noexcept;
+bool get_gx_native_vertex_input() noexcept;
 // The frame's vertex and index staging bytes still free (mapped regions of VertexBufferSize and IndexBufferSize that
 // cannot grow: a push past the end aborts).
 size_t vertex_staging_room() noexcept;

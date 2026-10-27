@@ -96,6 +96,7 @@ if (AURORA_ENABLE_GX)
     ../lib/gx/command_processor.cpp
     ../lib/gx/shader_info.cpp
     ../lib/gx/frame_interpolation.cpp
+    ../lib/gx/geometry_cache.cpp
   )
 
   target_include_directories(gx_fifo_tests PRIVATE

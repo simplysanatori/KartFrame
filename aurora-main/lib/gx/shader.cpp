@@ -689,7 +689,9 @@ auto normal_group_load(const ShaderConfig& config, u8 group, std::string_view vi
 
   auto buf = "vbuf"sv;
   auto offs = fmt::format("ubuf.vtx_start + {} * {}u + {}u", vidx, config.vtxStride, mapping.offset);
-  auto le = false; // Vertex buffer is always big endian (for now)
+  // Direct FIFO data is big endian (AttrConfig::le false); a record the FIFO processor de-indexed carries its array's
+  // byte order. An INDEX16 index itself is always read big endian below, before `le` turns to the array's order.
+  bool le = mapping.attrType == GX_DIRECT && mapping.le;
   const bool indexedNbt3 =
       mapping.nrmIndexCount == 3 && (mapping.attrType == GX_INDEX8 || mapping.attrType == GX_INDEX16);
   const u32 groupOffset = indexedNbt3 ? 0 : group * 3u * attr_comp_type_size(mapping.compType);
@@ -720,7 +722,9 @@ auto attr_load(const ShaderConfig& config, GXAttr attr, std::string_view vidx) -
   }
   auto buf = "vbuf"sv;
   auto offs = fmt::format("ubuf.vtx_start + {} * {}u + {}u", vidx, config.vtxStride, mapping.offset);
-  auto le = false; // Vertex buffer is always big endian (for now)
+  // Direct FIFO data is big endian (AttrConfig::le false); a record the FIFO processor de-indexed carries its array's
+  // byte order. An INDEX16 index itself is always read big endian below, before `le` turns to the array's order.
+  bool le = mapping.attrType == GX_DIRECT && mapping.le;
   if (mapping.attrType == GX_INDEX8) {
     offs = fmt::format("ubuf.array_start[{}] + raw_fetch_u8_1(&{}, {}) * {}u", attr - GX_VA_POS, buf, offs,
                        mapping.stride);
