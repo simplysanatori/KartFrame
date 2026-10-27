@@ -217,6 +217,12 @@ struct RenderPass {
   bool postCopyClear = false;
   bool snapshotColorResolveSource = false;
   bool efbTarget = false;
+  // Mario Kart Wii's Time Trial ghost, drawn alone into this pass and copied out (link_composite_source): an eye
+  // draws its perspective draws at the composite that samples compositeDepthCopy instead, with these constant-blend
+  // siblings of their eye pipelines (one per perspective GX draw, in order).
+  bool compositeSource = false;
+  const TextureRef* compositeDepthCopy = nullptr;
+  std::vector<PipelineRef> compositeSourcePipelines;
   std::vector<tex_palette_conv::ConvRequest> paletteConvs;
 };
 static std::vector<RenderPass> g_renderPasses;
@@ -1015,14 +1021,158 @@ void end_offscreen() {
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
 }
 
-template <>
-void push_draw_command(gx::DrawData data) {
-  push_draw_command(ShaderDrawCommand{.type = ShaderType::GX, .gx = data});
+// The Time Trial ghost in stereo. Mario Kart Wii draws the ghost kart alone into the cleared EFB, copies the picture
+// out (colour, then depth), clears, draws the race, and blends the copies back over it with one orthographic quad whose
+// depth comes from the depth copy. That quad is a native framebuffer effect: replayed as recorded it lays the same flat
+// picture of the ghost at the same place in both eyes, which the eyes cannot fuse (the owner saw the ghost doubled,
+// one copy to each side). Instead an eye draws the ghost's own perspective draws, with its own view, in the quad's
+// place: blended with a constant alpha (kCompositeSourceAlpha, KARTFRAME_GHOST_ALPHA) and depth-tested against the
+// world the eye has drawn by then. The native picture is unchanged. Adapted from iChris4/Wiicompiled_VR (GPL-3.0),
+// commits f2f7c50 and e89988f ("native composite source"). KARTFRAME_GHOST_MONO=1 keeps the flat composite.
+static bool ghost_stereo_enabled() noexcept {
+  static const bool enabled = [] {
+    const char* env = std::getenv("KARTFRAME_GHOST_MONO");
+    return env == nullptr || env[0] != '1';
+  }();
+  return enabled;
 }
+
+static float ghost_alpha() noexcept {
+  static const float alpha = [] {
+    const char* env = std::getenv("KARTFRAME_GHOST_ALPHA");
+    const float value = env != nullptr ? static_cast<float>(std::atof(env)) : stereo_replay::kCompositeSourceAlpha;
+    return value > 0.0f && value <= 1.0f ? value : stereo_replay::kCompositeSourceAlpha;
+  }();
+  return alpha;
+}
+
+// The configs of the eye pipelines of perspective draws (stereoStencil 1, no exact screen depth), by ref, recorded as
+// pipeline_ref first makes them: a ghost draw's constant-blend sibling is made from its eye pipeline's config. About
+// 2.8 KB each, a few thousand in a session; past the cap new ones are not recorded (a ghost drawn with such a pipeline
+// keeps the flat composite).
+static std::mutex g_eyeGxConfigsMutex;
+static absl::flat_hash_map<PipelineRef, gx::PipelineConfig> g_eyeGxConfigs;
+static absl::flat_hash_map<PipelineRef, PipelineRef> g_compositeSourcePipelineRefs;
+constexpr size_t kMaxEyeGxConfigs = 4096;
 
 template <>
 PipelineRef pipeline_ref(const gx::PipelineConfig& config) {
-  return find_pipeline(ShaderType::GX, config, [=] { return create_pipeline(config); });
+  const PipelineRef ref = find_pipeline(ShaderType::GX, config, [=] { return create_pipeline(config); });
+  if (config.stereoStencil == 1 && !config.shaderConfig.exactScreenDepth && ghost_stereo_enabled()) {
+    std::lock_guard lock{g_eyeGxConfigsMutex};
+    if (g_eyeGxConfigs.size() < kMaxEyeGxConfigs) {
+      g_eyeGxConfigs.try_emplace(ref, config);
+    }
+  }
+  return ref;
+}
+
+static PipelineRef composite_source_pipeline(PipelineRef eyePipeline) noexcept {
+  gx::PipelineConfig config;
+  {
+    std::lock_guard lock{g_eyeGxConfigsMutex};
+    if (const auto it = g_compositeSourcePipelineRefs.find(eyePipeline); it != g_compositeSourcePipelineRefs.end()) {
+      return it->second;
+    }
+    const auto it = g_eyeGxConfigs.find(eyePipeline);
+    if (it == g_eyeGxConfigs.end()) {
+      return 0;
+    }
+    config = it->second;
+  }
+  config.stereoStencil |= stereo_replay::kCompositeSourceBlend;
+  const PipelineRef ref = pipeline_ref(config);
+  std::lock_guard lock{g_eyeGxConfigsMutex};
+  g_compositeSourcePipelineRefs.emplace(eyePipeline, ref);
+  return ref;
+}
+
+static bool pass_has_draws(const RenderPass& pass) noexcept {
+  return std::ranges::any_of(pass.commands, [](const Command& c) { return c.type == CommandType::Draw; });
+}
+
+// Runs as the composite is recorded (GX thread), so frames without one pay one pointer test per draw.
+static void link_composite_source(const gx::DrawData& composite) noexcept {
+  const TextureRef* depthCopy = composite.uniformReplayLayout.compositeDepthCopy;
+  if (g_stereoLocalPlayerCount > 1 || !has_current_render_pass() || !g_renderPasses[g_currentRenderPass].efbTarget) {
+    return;
+  }
+  static std::atomic_uint32_t rejectLogs{0};
+  const auto reject = [](const char* why) noexcept {
+    if (rejectLogs.fetch_add(1, std::memory_order_relaxed) < 4) {
+      Log.info("Time Trial ghost: composite of a depth copy left flat ({})", why);
+    }
+  };
+  for (size_t p = g_currentRenderPass; p-- > 0;) {
+    if (g_renderPasses[p].resolveTarget.get() != depthCopy) {
+      continue;
+    }
+    if (!g_renderPasses[p].efbTarget) {
+      return reject("copy not of the EFB");
+    }
+    // The copies of one picture are consecutive passes; the draws are in the first, the passes after it hold no draw
+    // and no clear.
+    size_t s = p;
+    while (s > 0 && p - s < 4 && !pass_has_draws(g_renderPasses[s]) && !g_renderPasses[s].clearColor &&
+           !g_renderPasses[s].clearDepth && g_renderPasses[s - 1].efbTarget && g_renderPasses[s - 1].resolveTarget) {
+      --s;
+    }
+    auto& source = g_renderPasses[s];
+    if (source.compositeSource) {
+      return;
+    }
+    // The picture must be erased (colour and depth) before the composite: then the composite is the only way its
+    // draws reach the image, and drawing them there instead loses nothing.
+    bool erased = false;
+    for (size_t q = p + 1; q <= g_currentRenderPass && !erased; ++q) {
+      erased = g_renderPasses[q].efbTarget && g_renderPasses[q].clearColor && g_renderPasses[q].clearDepth &&
+               !g_renderPasses[q].postCopyClear;
+    }
+    if (!erased) {
+      return reject("its picture is not cleared before the composite");
+    }
+    std::vector<PipelineRef> pipelines;
+    size_t otherDraws = 0;
+    for (const auto& command : source.commands) {
+      if (command.type != CommandType::Draw) {
+        continue;
+      }
+      if (command.data.draw.type != ShaderType::GX || !command.data.draw.gx.uniformReplayLayout.perspective) {
+        ++otherDraws;
+        continue;
+      }
+      const PipelineRef ref = composite_source_pipeline(command.data.draw.gx.stereoPipeline);
+      if (ref == 0) {
+        return reject("a draw's eye pipeline config is unknown");
+      }
+      pipelines.push_back(ref);
+    }
+    if (pipelines.empty()) {
+      return reject("no perspective draw in the copied picture");
+    }
+    static std::atomic_bool linkLogged{false};
+    if (!linkLogged.exchange(true, std::memory_order_relaxed)) {
+      Log.info("Time Trial ghost: pass {} ({} perspective draws, {} other; copies in passes {}..{}) is drawn by each "
+               "eye at the composite in pass {} (alpha {:.2f}); {} eye pipeline configs known",
+               s, pipelines.size(), otherDraws, s, p, g_currentRenderPass, ghost_alpha(), [] {
+                 std::lock_guard lock{g_eyeGxConfigsMutex};
+                 return g_eyeGxConfigs.size();
+               }());
+    }
+    source.compositeSource = true;
+    source.compositeDepthCopy = depthCopy;
+    source.compositeSourcePipelines = std::move(pipelines);
+    return;
+  }
+  reject("no pass of this frame made the depth copy");
+}
+
+template <>
+void push_draw_command(gx::DrawData data) {
+  if (data.uniformReplayLayout.compositeDepthCopy != nullptr && ghost_stereo_enabled() &&
+      aurora::stereo_frame_provider_active())
+    UNLIKELY { link_composite_source(data); }
+  push_draw_command(ShaderDrawCommand{.type = ShaderType::GX, .gx = data});
 }
 
 void initialize() {
@@ -3196,6 +3346,124 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
     }
   };
 
+  // A recorded viewport and scissor in this target's terms. WebGPU requires 0 <= minDepth <= maxDepth <= 1.
+  // vp.znear/vp.zfar are in GX's own distance terms (0 = near); under UseReversedZ the host depth-buffer storage
+  // direction is flipped (near = 1, far = 0), so this range has to be remapped through 1-x the same way the
+  // projection matrix, depth compare function, and clear value all are - a plain min/max clamp (the previous code
+  // here) maps a *restricted* range (e.g. a viewport deliberately narrowed to force something to draw "in front of
+  // everything") to the wrong end of the buffer: what should land near the near-storage-extreme (1.0) instead lands
+  // near the far-storage-extreme (0.0), so anything else drawn afterward at its true depth wins the compare test and
+  // the "in front" geometry silently vanishes. A full [0,1] viewport is unaffected either way, which is why this only
+  // broke specific elements, not the whole scene. Matches upstream aurora's apply_viewport (lib/gfx/encoding.cpp).
+  //
+  // The remapped pair is then ordered and clamped before it reaches WebGPU. For any ordered guest range this is a
+  // no-op (znear <= zfar implies 1-zfar <= 1-znear), so upstream's fix is reproduced exactly; it only guards the
+  // swapped pair MKW is known to emit, which the raw remap would hand to SetViewport as minDepth > maxDepth and fail
+  // validation. The VR eye replay reuses these recorded values, so the guard covers that path too.
+  const auto map_viewport = [&](const Viewport& vp) noexcept {
+    const float remappedNear = gx::UseReversedZ ? 1.0f - vp.zfar : vp.znear;
+    const float remappedFar = gx::UseReversedZ ? 1.0f - vp.znear : vp.zfar;
+    return Viewport{
+        .left = (vp.left - static_cast<float>(sourceRegionLeft)) * scaleX,
+        .top = (vp.top - static_cast<float>(sourceRegionTop)) * scaleY,
+        .width = vp.width * scaleX,
+        .height = vp.height * scaleY,
+        .znear = std::clamp(std::min(remappedNear, remappedFar), 0.0f, 1.0f),
+        .zfar = std::clamp(std::max(remappedNear, remappedFar), 0.0f, 1.0f),
+    };
+  };
+  const auto map_scissor = [&](const ClipRect& sc) noexcept {
+    const auto sourceLeft = std::clamp(sc.x, sourceRegionLeft, sourceRegionRight);
+    const auto sourceTop = std::clamp(sc.y, sourceRegionTop, sourceRegionBottom);
+    const auto sourceRight = std::clamp(sc.x + sc.width, sourceLeft, sourceRegionRight);
+    const auto sourceBottom = std::clamp(sc.y + sc.height, sourceTop, sourceRegionBottom);
+    const auto left = static_cast<uint32_t>(
+        std::clamp(static_cast<int32_t>(std::floor(static_cast<float>(sourceLeft - sourceRegionLeft) * scaleX)), 0,
+                   static_cast<int32_t>(targetSize.width)));
+    const auto top = static_cast<uint32_t>(
+        std::clamp(static_cast<int32_t>(std::floor(static_cast<float>(sourceTop - sourceRegionTop) * scaleY)), 0,
+                   static_cast<int32_t>(targetSize.height)));
+    const auto right = static_cast<uint32_t>(
+        std::clamp(static_cast<int32_t>(std::ceil(static_cast<float>(sourceRight - sourceRegionLeft) * scaleX)),
+                   static_cast<int32_t>(left), static_cast<int32_t>(targetSize.width)));
+    const auto bottom = static_cast<uint32_t>(
+        std::clamp(static_cast<int32_t>(std::ceil(static_cast<float>(sourceBottom - sourceRegionTop) * scaleY)),
+                   static_cast<int32_t>(top), static_cast<int32_t>(targetSize.height)));
+    return std::array<uint32_t, 4>{left, top, right - left, bottom - top};
+  };
+  // The Time Trial ghost (link_composite_source): a single-player eye with the stencil eye target draws the ghost's
+  // perspective draws at its composite and skips them where they were recorded (that picture is erased before the
+  // composite anyway).
+  const bool compositeReplay = overrideTarget && !multiplayer && invocation.stereoEye < AURORA_STEREO_EYE_COUNT &&
+                               invocation.target->depthFormat == wgpu::TextureFormat::Depth24PlusStencil8;
+  const bool skipCompositeSource = compositeReplay && renderPasses[idx].compositeSource;
+  // Draws the ghost's perspective draws with this eye's uniforms, their own recorded viewport and scissor, the
+  // constant-blend pipelines and the world's depth so far. False (nothing drawn) while one of those pipelines is
+  // not ready yet: the composite is then drawn flat as before.
+  const auto replay_composite_source = [&](const gx::DrawData& composite) -> bool {
+    const RenderPass* source = nullptr;
+    for (u32 p = 0; p < idx && source == nullptr; ++p) {
+      if (renderPasses[p].compositeSource &&
+          renderPasses[p].compositeDepthCopy == composite.uniformReplayLayout.compositeDepthCopy) {
+        source = &renderPasses[p];
+      }
+    }
+    if (source == nullptr) {
+      return false;
+    }
+    if (skip_unready_pipelines()) {
+      for (const PipelineRef ref : source->compositeSourcePipelines) {
+        wgpu::RenderPipeline ready;
+        if (!try_pipeline(ref, ready)) {
+          return false;
+        }
+      }
+    }
+    mark(GpuTimingCategory::EyeScene);
+    const float alpha = ghost_alpha();
+    const wgpu::Color blendConstant{alpha, alpha, alpha, alpha};
+    pass.SetBlendConstant(&blendConstant);
+    size_t drawIndex = 0;
+    for (const auto& command : source->commands) {
+      if (command.type == CommandType::SetViewport) {
+        const Viewport vp = map_viewport(command.data.setViewport);
+        pass.SetViewport(vp.left, vp.top, vp.width, vp.height, vp.znear, vp.zfar);
+        continue;
+      }
+      if (command.type == CommandType::SetScissor) {
+        apply_scissor(map_scissor(command.data.setScissor));
+        continue;
+      }
+      if (command.type != CommandType::Draw || command.data.draw.type != ShaderType::GX ||
+          !command.data.draw.gx.uniformReplayLayout.perspective) {
+        continue;
+      }
+      if (drawIndex >= source->compositeSourcePipelines.size()) {
+        break;
+      }
+      const PipelineRef pipeline = source->compositeSourcePipelines[drawIndex++];
+      // gx::render sets the blend constant itself for a draw with a destination alpha; these keep ours.
+      gx::DrawData draw = command.data.draw.gx;
+      draw.dstAlpha = UINT32_MAX;
+      const gfx::Range* uniform = nullptr;
+      if (invocation.stereoEye < draw.stereoUniformRanges.size() &&
+          draw.stereoUniformRanges[invocation.stereoEye].size != 0) {
+        uniform = &draw.stereoUniformRanges[invocation.stereoEye];
+      } else if (invocation.interpolatedFrame >= 0 &&
+                 static_cast<size_t>(invocation.interpolatedFrame) < draw.interpolatedUniformRanges.size() &&
+                 draw.interpolatedUniformRanges[invocation.interpolatedFrame].size != 0) {
+        uniform = &draw.interpolatedUniformRanges[invocation.interpolatedFrame];
+      }
+      gx::render(draw, pass, encodeState, source->requireReadyPipelines, uniform, pipeline);
+    }
+    const wgpu::Color noBlendConstant{0.0, 0.0, 0.0, 0.0};
+    pass.SetBlendConstant(&noBlendConstant);
+    // The source's viewport and scissor were applied; the next draw restores its own.
+    viewportStateKnown = false;
+    scissorStateKnown = false;
+    return true;
+  };
+
   for (const auto& cmd : renderPasses[idx].commands) {
 #ifdef AURORA_GFX_DEBUG_GROUPS
     {
@@ -3219,35 +3487,8 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
     case CommandType::SetViewport: {
       const auto& vp = cmd.data.setViewport;
       sourceViewport = {vp.left, vp.top, vp.width, vp.height};
-      // WebGPU requires 0 <= minDepth <= maxDepth <= 1. vp.znear/vp.zfar are in GX's own distance
-      // terms (0 = near); under UseReversedZ the host depth-buffer storage direction is flipped
-      // (near = 1, far = 0), so this range has to be remapped through 1-x the same way the
-      // projection matrix, depth compare function, and clear value all are - a plain min/max clamp
-      // (the previous code here) maps a *restricted* range (e.g. a viewport deliberately narrowed
-      // to force something to draw "in front of everything") to the wrong end of the buffer: what
-      // should land near the near-storage-extreme (1.0) instead lands near the far-storage-extreme
-      // (0.0), so anything else drawn afterward at its true depth wins the compare test and the
-      // "in front" geometry silently vanishes. A full [0,1] viewport is unaffected either way,
-      // which is why this only broke specific elements, not the whole scene. Matches upstream
-      // aurora's apply_viewport (lib/gfx/encoding.cpp).
-      //
-      // The remapped pair is then ordered and clamped before it reaches WebGPU. For any ordered
-      // guest range this is a no-op (znear <= zfar implies 1-zfar <= 1-znear), so upstream's fix is
-      // reproduced exactly; it only guards the swapped pair MKW is known to emit, which the raw
-      // remap would hand to SetViewport as minDepth > maxDepth and fail validation. The VR eye
-      // replay below reuses these recorded values, so the guard covers that path too.
-      const float remappedNear = gx::UseReversedZ ? 1.0f - vp.zfar : vp.znear;
-      const float remappedFar = gx::UseReversedZ ? 1.0f - vp.znear : vp.zfar;
-      const float minDepth = std::clamp(std::min(remappedNear, remappedFar), 0.0f, 1.0f);
-      const float maxDepth = std::clamp(std::max(remappedNear, remappedFar), 0.0f, 1.0f);
-      recordedViewport = {
-          .left = (vp.left - static_cast<float>(sourceRegionLeft)) * scaleX,
-          .top = (vp.top - static_cast<float>(sourceRegionTop)) * scaleY,
-          .width = vp.width * scaleX,
-          .height = vp.height * scaleY,
-          .znear = minDepth,
-          .zfar = maxDepth,
-      };
+      // See map_viewport.
+      recordedViewport = map_viewport(vp);
       hudScreenViewport = false;
       viewportStateKnown = true;
       apply_viewport(false);
@@ -3255,23 +3496,7 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
     case CommandType::SetScissor: {
       const auto& sc = cmd.data.setScissor;
       sourceScissor = {float(sc.x), float(sc.y), float(sc.width), float(sc.height)};
-      const auto sourceLeft = std::clamp(sc.x, sourceRegionLeft, sourceRegionRight);
-      const auto sourceTop = std::clamp(sc.y, sourceRegionTop, sourceRegionBottom);
-      const auto sourceRight = std::clamp(sc.x + sc.width, sourceLeft, sourceRegionRight);
-      const auto sourceBottom = std::clamp(sc.y + sc.height, sourceTop, sourceRegionBottom);
-      const auto left = static_cast<uint32_t>(
-          std::clamp(static_cast<int32_t>(std::floor(static_cast<float>(sourceLeft - sourceRegionLeft) * scaleX)), 0,
-                     static_cast<int32_t>(targetSize.width)));
-      const auto top = static_cast<uint32_t>(
-          std::clamp(static_cast<int32_t>(std::floor(static_cast<float>(sourceTop - sourceRegionTop) * scaleY)), 0,
-                     static_cast<int32_t>(targetSize.height)));
-      const auto right = static_cast<uint32_t>(
-          std::clamp(static_cast<int32_t>(std::ceil(static_cast<float>(sourceRight - sourceRegionLeft) * scaleX)),
-                     static_cast<int32_t>(left), static_cast<int32_t>(targetSize.width)));
-      const auto bottom = static_cast<uint32_t>(
-          std::clamp(static_cast<int32_t>(std::ceil(static_cast<float>(sourceBottom - sourceRegionTop) * scaleY)),
-                     static_cast<int32_t>(top), static_cast<int32_t>(targetSize.height)));
-      recordedScissor = {left, top, right - left, bottom - top};
+      recordedScissor = map_scissor(sc);
       hudScreenScissor = false;
       scissorStateKnown = true;
       apply_scissor(recordedScissor);
@@ -3293,6 +3518,13 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
                                                                    draw.gx.uniformReplayLayout.perspective,
                                                                    draw.gx.uniformReplayLayout.nativeEfbEffect) ||
                             !stereo_replay::subviews_overlap(sourceScissor, playerRegion))) {
+          break;
+        }
+        if (skipCompositeSource && draw.gx.uniformReplayLayout.perspective) {
+          break;
+        }
+        if (compositeReplay && draw.gx.uniformReplayLayout.compositeDepthCopy != nullptr &&
+            replay_composite_source(draw.gx)) {
           break;
         }
         const gfx::Range* uniformOverride = nullptr;

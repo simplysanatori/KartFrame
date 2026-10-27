@@ -3,8 +3,17 @@
 #include <aurora/math.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace aurora::gfx::stereo_replay {
+
+// gx::PipelineConfig::stereoStencil bit (bit 0 is the eye's Depth24PlusStencil8 target): the colour blends with the
+// blend constant (src * c + dst * (1 - c)), alpha is written as is. An eye re-issues the draws of Mario Kart Wii's Time
+// Trial ghost with it at the ghost's composite (gfx common.cpp, link_composite_source).
+constexpr uint32_t kCompositeSourceBlend = 2u;
+// The blend constant those draws use by default (KARTFRAME_GHOST_ALPHA overrides it): about the strength of the game's
+// own composite of the ghost (the value iChris4/Wiicompiled_VR uses on Quest).
+constexpr float kCompositeSourceAlpha = 0.5f;
 
 struct SubviewRect {
   float left = 0.f;

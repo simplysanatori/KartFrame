@@ -280,3 +280,12 @@ ids: 0 green shell, 1 red shell, 2 banana, 4 mushroom, 5 triple mushroom, 10 gol
 and bananas; count 1-3). The models come from
 the disc's Race/Common.szs at run time (log: "cockpit item: Race/Common.szs (N bytes) parsed in X ms").
 `mkw_cockpit_item_data_tests <path to Common.szs>` audits all 15 models by hand. Results: frame/perf/LANE_AH.md.
+
+## Lane AE (the Time Trial ghost in stereo)
+Mario Kart Wii draws the ghost kart alone into the cleared EFB, copies colour and depth out, clears, draws the race
+and blends the copies back with one orthographic quad whose depth comes from the depth copy (a native framebuffer
+effect: one flat picture at the same place in both eyes, seen doubled). An eye now draws the ghost's perspective draws
+in that quad's place with its own view, blended with a constant alpha and depth-tested against its world
+(aurora common.cpp link_composite_source; gx.cpp: the stereoStencil bit 2 pipeline sibling). KARTFRAME_GHOST_MONO=1
+keeps the flat composite; KARTFRAME_GHOST_ALPHA=<0..1> (0.5) the ghost's strength. Log lines "Time Trial ghost: pass
+N ... is drawn by each eye" (once) or "... left flat (<reason>)" (up to 4). Details: frame/perf/LANE_AE.md.
