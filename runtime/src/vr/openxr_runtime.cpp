@@ -326,6 +326,13 @@ bool OpenXRRuntime::EnumerateViewConfiguration() {
             properties[eye].recommendedImageRectHeight,
             properties[eye].maxImageRectHeight, m_config.resolution_scale);
     }
+    // Lane AG: the runtime's size (SteamVR: its resolution setting, the wrapper's KARTFRAME_EYE_PX) and ours.
+    std::ostringstream message;
+    message << "view size: recommended " << properties[0].recommendedImageRectWidth << 'x'
+            << properties[0].recommendedImageRectHeight << " (max " << properties[0].maxImageRectWidth << 'x'
+            << properties[0].maxImageRectHeight << "), render_scale " << m_config.resolution_scale << " -> eyes "
+            << m_view_configuration[0].render_width << 'x' << m_view_configuration[0].render_height;
+    Log(OpenXRLogLevel::Info, message.str());
     return true;
 }
 

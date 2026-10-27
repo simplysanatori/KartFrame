@@ -9,8 +9,12 @@
 #
 # Environment (all optional; session.env below is the way to set them from the Steam library):
 #   KARTFRAME_HOME          data folder, default ~/.local/share/KartFrame (game/, build/, sessions/)
-#   KARTFRAME_REFRESH_HZ    refresh rate asked of SteamVR, 90 or 120 (default 120)
-#   KARTFRAME_EYE_PX        per-eye resolution override asked of SteamVR (default 1728; tests only, 1728 is the floor)
+#   KARTFRAME_REFRESH_HZ    refresh rate, 90 or 120: set as SteamVR's per-app rate and passed to the game (default:
+#                           [vr] refresh_rate of UserData/Config.toml, else 120). 90 Hz shows the game's 60 frames a
+#                           second 1.5 refreshes each (interpolated): it felt wrong to the owner; 120 is the default
+#   KARTFRAME_EYE_PX        per-eye size asked of SteamVR (resolutionOverride), 1024 to 4096 (default 1728, SteamVR's
+#                           Auto here; its 100 % is the panels' 2160). [vr] render_scale scales it
+#   KARTFRAME_RENDER_SCALE  one launch's [vr] render_scale (eyes = SteamVR's size x this; 1.25 = 2160 at 1728)
 #   KARTFRAME_FDM_LAYER=0   sets DISABLE_VULKAN_FDM_INJECTION_LAYER=1 (A/B: Valve's FDM layer off)
 #   KARTFRAME_SYSMEM=0      leaves Turnip in tiled mode; default 1 sets TU_DEBUG=sysmem (measured: the
 #                           race holds 120 Hz at 1728 only with it)
@@ -96,12 +100,29 @@ if [ ! -f "$STATE/Config.toml" ] && [ -f "$HERE/Config.frame.toml" ]; then
 fi
 
 # SteamVR's per-app settings, every launch. SteamAppId is set by Steam for a library launch.
-HZ=${KARTFRAME_REFRESH_HZ:-120}   # TODO(lane A): follow Config's refresh choice if one is added
-case "$HZ" in 90 | 120) ;; *) log "KARTFRAME_REFRESH_HZ=$HZ is not 90 or 120, using 120"; HZ=120 ;; esac
+# The refresh rate: KARTFRAME_REFRESH_HZ, else the config's [vr] refresh_rate, else 120. SteamVR offers the game
+# only the rate its per-app setting runs, so the wrapper sets that rate and hands the same one to the game.
+HZ_FROM=KARTFRAME_REFRESH_HZ HZ=$KARTFRAME_REFRESH_HZ
+if [ -z "$HZ" ]; then
+    HZ_FROM="Config.toml [vr] refresh_rate"
+    HZ=$(awk -F= '/^[ \t]*\[/ { vr = ($0 ~ /^[ \t]*\[vr\][ \t]*$/) } vr && $1 ~ /^[ \t]*refresh_rate[ \t]*$/ {
+        v = $2; sub(/#.*/, "", v); gsub(/[ \t"]/, "", v); print v; exit }' "$STATE/Config.toml" 2> /dev/null)
+    [ -n "$HZ" ] || { HZ_FROM=default; HZ=120; }
+fi
+case "$HZ" in 90 | 90.0 | 120 | 120.0) HZ=${HZ%.0} ;; *) log "refresh rate $HZ ($HZ_FROM) is not 90 or 120, using 120"; HZ=120 HZ_FROM=default ;; esac
+export KARTFRAME_REFRESH_HZ=$HZ
+log "refresh rate $HZ Hz ($HZ_FROM)"
+# The per-eye size SteamVR gives the game (its recommended view size); the game multiplies it by render_scale.
+EYE_PX=${KARTFRAME_EYE_PX:-1728}
+if ! [[ "$EYE_PX" =~ ^[0-9]+$ ]] || [ "$EYE_PX" -lt 1024 ] || [ "$EYE_PX" -gt 4096 ]; then
+    log "KARTFRAME_EYE_PX=$EYE_PX is not a size from 1024 to 4096, using 1728"; EYE_PX=1728
+fi
+[ -n "$KARTFRAME_RENDER_SCALE" ] && export KARTFRAME_RENDER_SCALE
+log "eye size asked of SteamVR: $EYE_PX (SteamVR: Auto 1728, 100 % 2160), render_scale ${KARTFRAME_RENDER_SCALE:-from Config.toml}"
 VRCMD=${KARTFRAME_VRCMD:-$(command -v vrcmd || echo /opt/steamvr/bin/linuxarm64/vrcmd)}
 VRSETTINGS=${KARTFRAME_VRSETTINGS:-$HOME/.config/openvr/config/steamvr.vrsettings}
 STEAMVR_DIR=${KARTFRAME_STEAMVR_DIR:-/opt/steamvr/bin/linuxarm64}
-SETTINGS="preferredRefreshRate=$HZ framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2 resolutionOverride=${KARTFRAME_EYE_PX:-1728}"
+SETTINGS="preferredRefreshRate=$HZ framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2 resolutionOverride=$EYE_PX"
 if [ -z "$SteamAppId" ]; then
     log "no SteamAppId: SteamVR per-app settings NOT applied (not a Steam library launch)"
 elif [ ! -x "$VRCMD" ]; then

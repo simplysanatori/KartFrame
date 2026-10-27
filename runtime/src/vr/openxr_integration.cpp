@@ -852,6 +852,11 @@ public:
                                                                     : "WiiCompiled";
         config.engine_name = "Aurora";
         config.resolution_scale = RuntimeConfigFile::VrRenderScale();
+        // KARTFRAME_RENDER_SCALE (lane AG): one launch's render_scale (session.env), same range as the config's.
+        if (const char* env = std::getenv("KARTFRAME_RENDER_SCALE"); env != nullptr && *env != '\0') {
+            const float scale = std::strtof(env, nullptr);
+            if (scale > 0.0f) config.resolution_scale = std::clamp(scale, 0.25f, 2.0f);
+        }
 #if defined(_WIN32)
         config.required_extensions = {kRequiredAuroraBackend == BACKEND_VULKAN ? "XR_KHR_vulkan_enable2" : "XR_KHR_D3D12_enable"};
         config.optional_extensions = {"XR_KHR_win32_convert_performance_counter_time",
