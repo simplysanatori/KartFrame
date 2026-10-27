@@ -13,11 +13,13 @@ resolution_multiplier = 1.0
 [vr]
 enabled = true
 required = false
-# 1.0 renders the eyes at the size SteamVR's resolutionOverride (1728, set by the launch wrapper) asks for.
+# 1.0 renders the eyes at the size SteamVR's resolutionOverride (1728, set by the launch wrapper) asks for;
+# 1.25 is the panel's own 2160 per eye (more GPU time a frame; see the README's settings).
 render_scale = 1.000000
 # 1 = render at the headset's refresh rate (120 Hz), interpolated from the game's 60 fps.
 frame_interpolation_fps = 1
 frame_pacing = "auto"
+# 120 or 90: the launch wrapper sets it as SteamVR's per-app rate every launch (90 felt less smooth for a 60 fps game).
 refresh_rate = 120
 # Grips hold the wheel in the first-person cockpit (the right bumper drifts there); elsewhere they drift.
 hand_steering = true

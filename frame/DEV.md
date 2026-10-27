@@ -54,7 +54,12 @@ conversion"; abseil, zlib, libpng and freetype are built static from pinned sour
 ## Pacing knobs (lane A)
 Config `[vr] frame_pacing = auto|inline|pipelined` (auto = pipelined, measured) and `refresh_rate`
 (120; requested in-app only when SteamVR offers exactly that rate, else the wrapper's per-app key
-decides). Menus are a quad layer fixed in the room (menu_shader_quality 0), the first-run guide is
+decides; lane AG: the wrapper reads it from Config.toml, sets it as the per-app rate and exports it as
+KARTFRAME_REFRESH_HZ, so SteamVR and the game agree; 90 or 120). Eye size (lane AG): SteamVR's recommended
+view size is the wrapper's KARTFRAME_EYE_PX (resolutionOverride, default 1728 = SteamVR's own 100 % here, the
+driver's panel size is 2160), times `[vr] render_scale` (KARTFRAME_RENDER_SCALE for one launch); the
+runtime logs `view size: recommended ... -> eyes ...` at start. Mock: MOCK_XR_EYE, MOCK_XR_HZ (the OpenVR
+stub's fake grid follows MOCK_XR_HZ too); frame/perf/LANE_AG.md has the matrix. Menus are a quad layer fixed in the room (menu_shader_quality 0), the first-run guide is
 projected. Env: KARTFRAME_PACING overrides the mode; KARTFRAME_REFRESH_HZ the rate;
 KARTFRAME_PACING_MARGIN_US (1000) is kept free before the deadline for release + xrEndFrame;
 every refresh always by default (a late set repeats the retained layer, which SteamVR reprojects;

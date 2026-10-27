@@ -135,10 +135,10 @@ Hold left View for half a second. The VR settings panel opens. Everything on it 
 
 | Key | Default | What it does |
 |---|---|---|
-| `[vr] render_scale` | 1.0 | Eye size relative to the size SteamVR's resolution setting gives the game (1728 per eye at SteamVR's 100 %) |
+| `[vr] render_scale` | 1.0 | Eye size relative to the size SteamVR gives the game: 1728 per eye, which is SteamVR's own 100 % on the Frame and what the wrapper asks for. 1.111 is 1920, 1.185 is 2048, 1.25 is 2160 (the panel's own resolution). The panel's "Resolution per eye" slider writes it; it applies at the next launch. Above 1.0 costs GPU time, see Performance |
 | `[vr] frame_interpolation_fps` | 1 | 1 renders at the headset's refresh rate, interpolated from the game's 60 frames a second |
 | `[vr] frame_pacing` | `"auto"` | `auto`, `inline` or `pipelined`. Auto picks pipelined |
-| `[vr] refresh_rate` | 120 | The refresh rate the game asks for |
+| `[vr] refresh_rate` | 120 | 120 or 90. The launch wrapper sets it as SteamVR's rate for this game at every launch, and the game follows. At 90 Hz each of the game's 60 frames a second spans 1.5 refreshes instead of 2 (interpolated); that felt less smooth to me, so 120 is the default |
 | `[vr] menu_shader_quality` | 0 | 0 is a plain dark background behind the menus |
 | `[vr] hand_steering` | true | Grips hold the wheel in the first-person cockpit |
 | `[vr] hud_virtual_screen` | true | Menus and the race HUD on a virtual screen |
@@ -153,7 +153,9 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | Name | What it does |
 |---|---|
 | `KARTFRAME_PACING` | `auto`, `inline` or `pipelined`, overriding the config |
-| `KARTFRAME_REFRESH_HZ` | 90 or 120, the rate asked of SteamVR |
+| `KARTFRAME_REFRESH_HZ` | 90 or 120 for this launch, instead of `[vr] refresh_rate` |
+| `KARTFRAME_EYE_PX` | The per-eye size the wrapper asks of SteamVR, 1024 to 4096 (default 1728, SteamVR's 100 % here); `render_scale` multiplies it |
+| `KARTFRAME_RENDER_SCALE` | `render_scale` for this launch, e.g. 1.25 for 2160 per eye |
 | `KARTFRAME_SYSMEM` | 0 turns off the GPU's direct memory rendering mode (`TU_DEBUG=sysmem`); it is on by default |
 | `KARTFRAME_FDM_LAYER` | 0 disables Valve's foveation layer in the Vulkan chain, to compare |
 | `KARTFRAME_END_PHASE` | `after` (default), `before`, or `off`: when in the refresh each frame is handed to SteamVR, against the compositor grid the wrapper's helper publishes. `off` hands over at the wake-up, which doubles the image |
