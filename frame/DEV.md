@@ -240,3 +240,19 @@ and up to 30 s for the file, then TERM, then KILL, then a pkill on anything writ
 panels.mkv. The log says "recorder stopped" or "recorder was never started"; a leftover
 panels.mkv.part is logged with its size and left for the owner. frame/test-wrapper-recorder.sh checks
 the four paths with a fake game and a fake framecorder (about 45 s).
+
+## A/B tool (lane AD)
+`frame/tools/abcompare.sh [--env-a K=V] [--env-b K=V] [--env K=V] A B` runs two builds (worktree, build dir or
+kartframe binary) through frame/perf/run.sh and mockrun.sh (shared lock, headset and running-game checks), same
+scripted Grand Prix (A presses until `--menu-until` 43 s, head still, hands fixed, kart standing), 100 s each, then
+`abcompare.py` prints metric | A | B | delta: errors, sets/s, late %, GPU ms per set p50/p95 (race seconds outside the
+dump windows, frame/perf/pacing-parts.py's rules), and the eye images: stamped dumps (MOCK_XR_STAMP, MOCK_XR_DUMP_QUEUE,
+ten 1-2 s windows) paired by eye and scene position (the stamp's game frames since "entered RaceScene", plus the offset
+at which the pictures best match: the race starts differ by a frame or two), per pair the share of pixels off by more than
+`--tol` 2/255 and PSNR, the stamp corner left out, worst pair in worst.png (A | B | 16x diff). PASS needs 0 errors,
+mean pair diff < `--max-diff-pct` 0.5, worst pair < `--max-worst-pct` 5, >= 20 pairs; `--gpu-delta-max MS` and
+`--late-delta-max PCT` check a timing claim; `--rounds N` interleaves A B A B; `--keep` keeps the dumps (400 MB a side).
+Limits: the mock cannot make the race frame-exact. Menu loading varies by multiples of 1.5 s (GO at about 44 s or 52 s),
+the stamp's interpolation weights differ per run (hence the nearest-position pairing, +-0.05 frames), AI karts and the
+kart's first coasting are only nearly repeatable, so moving scenes carry a noise floor: run `abcompare.sh X X` first and
+read a change against it. GPU/pacing deltas of a few percent need `--rounds 2` or more (clock and thermals drift).
