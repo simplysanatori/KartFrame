@@ -1,6 +1,7 @@
 ﻿#include "hle_stubs.h"
 #include "isa/big_endian.h"
 #include "hle/dvd_contract.h"
+#include "hle/dvd_vr_asset.h"
 #include "hle/runtime_parse_helpers.h"
 #include "memory.h"
 
@@ -741,6 +742,20 @@ extern "C" const char* DVDResolveHostPathForTest(const char* dvdPath)
 
     resolved = HostPathText(g_fileEntries[it->second].hostPath);
     return resolved.c_str();
+}
+
+std::vector<uint8_t> DVDReadVrAsset(const char* dvdPath) {
+    if (dvdPath == nullptr || dvdPath[0] == '\0') return {};
+    DVDInit_8015EA1C();
+    const auto it = g_pathToEntry.find(NormalizePath(dvdPath));
+    if (it == g_pathToEntry.end() || it->second < 0 ||
+        it->second >= static_cast<int32_t>(g_fileEntries.size())) return {};
+    const DVDFileEntry& entry = g_fileEntries[it->second];
+    if (entry.isDirectory || entry.size == 0 || entry.size > 32u * 1024u * 1024u) return {};
+    std::vector<uint8_t> bytes(entry.size);
+    std::ifstream file(entry.hostPath, std::ios::binary);
+    if (!file.read(reinterpret_cast<char*>(bytes.data()), bytes.size())) return {};
+    return bytes;
 }
 
 // ============================================================================

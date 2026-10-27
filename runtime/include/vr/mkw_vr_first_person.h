@@ -3,6 +3,7 @@
 #pragma once
 
 #include "vr/steering_wheel.h"
+#include "vr/mkw_vr_item.h"
 #include "vr/vr_controls.h"
 
 #include <algorithm>
@@ -679,5 +680,20 @@ void MkwVRFirstPersonReset() noexcept;
 // whenever the mode is off, the race has not produced a usable anchor, or the
 // anchor has been missing long enough to give up holding the last one.
 FirstPersonAnchor MkwVRFirstPersonGetAnchor() noexcept;
+
+// The held item (iChris4's Wiicompiled_VR fork), read from the inventory at
+// the race draw boundary while the cockpit view is on. A race_generation
+// change invalidates an item retained by a prior race.
+HeldItem MkwVRFirstPersonGetHeldItem() noexcept;
+
+// [vr] cockpit_item_hand = "left" | "right" | "off" (default right) and
+// [vr] cockpit_item_size = 0.05..0.60 metres (default 0.2), read at start-up
+// and at every race start; KARTFRAME_COCKPIT_ITEM_HAND and
+// KARTFRAME_COCKPIT_ITEM_SIZE override them. hand: 0 left, 1 right, 2 off.
+struct CockpitItemSettings {
+    uint8_t hand = 1;
+    float size = 0.2f;
+};
+CockpitItemSettings MkwVRCockpitItemSettings() noexcept;
 
 } // namespace mkw::vr

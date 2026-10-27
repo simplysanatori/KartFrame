@@ -599,6 +599,7 @@ struct GxPresentRecord {
     std::array<float, 12> anchor{};
     bool anchorValid = false;
     float anchorUnitsPerMeter = 0.0f;
+    AuroraCockpitItem cockpitItem{};
     bool reportPaced = false;
     bool paced = false;
     uint32_t localPlayerCount = 1;
@@ -616,6 +617,7 @@ void GxPresent_gx(GxPresentRecord record) {
     } else {
         aurora_set_stereo_scene_anchor(record.anchorValid ? record.anchor.data() : nullptr);
     }
+    aurora_set_stereo_cockpit_item(&record.cockpitItem);
     aurora_set_stereo_local_player_count(record.localPlayerCount);
     aurora_end_frame_ex(record.contentTag, record.imguiFrame);
     g_auroraFrameActive.store(false, std::memory_order_release);
@@ -700,6 +702,13 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     record.anchor = anchor.anchor;
     record.anchorValid = anchor.valid;
     record.anchorUnitsPerMeter = anchor.unitsPerMeter;
+    if (anchor.valid) {
+        // The held item of the same guest frame (iChris4's Wiicompiled_VR fork).
+        const auto item = mkw::vr::MkwVRFirstPersonGetHeldItem();
+        const auto settings = mkw::vr::MkwVRCockpitItemSettings();
+        record.cockpitItem = {item.race_generation, item.id, item.count, settings.hand,
+                              item.valid && settings.hand != 2, 0, item.use_mark, settings.size};
+    }
     // Latch the current policy safety state into this exact Aurora job. The
     // asynchronous worker may ask for an XR packet after the guest has already
     // begun the next frame, so immersive replay is accepted only when both

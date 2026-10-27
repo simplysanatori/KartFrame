@@ -268,3 +268,15 @@ Limits: the mock cannot make the race frame-exact. Menu loading varies by multip
 the stamp's interpolation weights differ per run (hence the nearest-position pairing, +-0.05 frames), AI karts and the
 kart's first coasting are only nearly repeatable, so moving scenes carry a noise floor: run `abcompare.sh X X` first and
 read a change against it. GPU/pacing deltas of a few percent need `--rounds 2` or more (clock and thermals drift).
+
+## Lane AH (the held item in the hand)
+From iChris4's Wiicompiled_VR fork: in the first-person cockpit the inventory item (triples as copies, grow in,
+shrink away, the golden mushroom squeezed on each use) is drawn in one hand, in the cockpit pass of each eye.
+Config `[vr] cockpit_item_hand = "left"|"right"|"off"` (default right) and `cockpit_item_size` (metres across,
+0.05-0.60, default 0.2), read by mkw_vr_first_person.cpp at start-up and at every race start (not in
+runtime_config.h); env KARTFRAME_COCKPIT_ITEM_HAND / KARTFRAME_COCKPIT_ITEM_SIZE override them, and
+KARTFRAME_COCKPIT_ITEM_TEST=<id>[:<count>] (tests) shows that item while the inventory is empty (PAL inventory
+ids: 0 green shell, 1 red shell, 2 banana, 4 mushroom, 5 triple mushroom, 10 golden mushroom, 16-18 triple shells
+and bananas; count 1-3). The models come from
+the disc's Race/Common.szs at run time (log: "cockpit item: Race/Common.szs (N bytes) parsed in X ms").
+`mkw_cockpit_item_data_tests <path to Common.szs>` audits all 15 models by hand. Results: frame/perf/LANE_AH.md.

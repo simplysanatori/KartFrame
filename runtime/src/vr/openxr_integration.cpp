@@ -2576,7 +2576,10 @@ private:
         for (size_t hand = 0; hand < 2; ++hand) {
             auto& target = cockpit.hands[hand];
             const auto& from = driving.hands[hand];
-            target.tracked = from.tracked && (calibration.active || !MkwVRCharacterHandActive(hand));
+            // A hand the character model draws is still located: it carries the held item
+            // (Aurora draws no hand of its own there).
+            target.tracked = from.tracked;
+            target.characterHand = !calibration.active && MkwVRCharacterHandActive(hand);
             target.calibrationMarker=calibration.active;
             target.calibrationCaptured=calibration.captured[hand];
             target.held = from.held;
