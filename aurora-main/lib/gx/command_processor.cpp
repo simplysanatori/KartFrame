@@ -1878,6 +1878,35 @@ static gfx::Range push_draw_vertices(const u8* vertices, u32 vtxCount, u32 vtxSi
   return range;
 }
 
+// A draw the frame's staging cannot hold is dropped: the vertex and index regions are mapped and cannot grow (a push
+// past the end aborts), and a frame that fills them is not one this renderer should take down (iChris4 e4c98da).
+static void note_skipped_draw() noexcept {
+  gfx::g_stagingStats.skippedDraws.fetch_add(1, std::memory_order_relaxed);
+  // Its bytes may sit in the staging after the last recorded draw's: the next draw must not merge into that one (the
+  // merge requires consecutive ranges).
+  g_gxState.stateDirty = true;
+  static u32 reports = 0;
+  if (reports < 20 || reports % 1000 == 0) {
+    Log.warn("Frame staging full: a draw was skipped ({} KiB of vertex staging free of {}, {} KiB of index staging "
+             "free of {})",
+             gfx::vertex_staging_room() >> 10, gfx::VertexBufferSize >> 10, gfx::index_staging_room() >> 10,
+             gfx::IndexBufferSize >> 10);
+  }
+  ++reports;
+}
+
+// A plain draw's vertices into the frame's vertex staging, or nothing when even its FIFO records do not fit.
+static std::optional<gfx::Range> stage_plain_vertices(const u8* vertices, u32 vtxCount, u32 vtxSize) noexcept {
+  // push_draw_vertices maps count * padded stride bytes.
+  const size_t fifoBytes = static_cast<size_t>(vtxCount) * padded_upload_stride(vtxSize);
+  if (gfx::vertex_staging_room() < fifoBytes)
+    UNLIKELY {
+      note_skipped_draw();
+      return std::nullopt;
+    }
+  return push_draw_vertices(vertices, vtxCount, vtxSize);
+}
+
 // Uploads an indexed vertex array with elements `uploadStride` bytes apart (see padded_upload_stride). A padded upload
 // copies each element and zeroes its trailing bytes; a trailing partial element is copied as far as the array goes.
 static gfx::Range push_vertex_array(const AttrArray& array, u32 uploadStride) {
@@ -2326,7 +2355,10 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
 
   // This entry point bypasses process(), so it owns the renderer lock itself.
   std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
-  const gfx::Range vertRange = push_draw_vertices(vertices, vtxCount, vtxSize);
+  const std::optional<gfx::Range> staged = stage_plain_vertices(vertices, vtxCount, vtxSize);
+  if (!staged)
+    UNLIKELY { return true; }
+  const gfx::Range vertRange = *staged;
   const bool interpolationIdentityActive = frame_interpolation_identity_needed();
   const PnMtxUsage matrixUsage = interpolationIdentityActive ? pn_mtx_usage(vertices, vtxCount, vtxSize) : PnMtxUsage{};
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
@@ -2362,8 +2394,11 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
 
   // Push raw vertex data to buffer
   const uint8_t* vertices = data + pos;
-  gfx::Range vertRange = push_draw_vertices(vertices, vtxCount, vtxSize);
   pos += totalVtxBytes;
+  const std::optional<gfx::Range> staged = stage_plain_vertices(vertices, vtxCount, vtxSize);
+  if (!staged)
+    UNLIKELY { return true; }
+  const gfx::Range vertRange = *staged;
 
   // The animated vertex array this draw takes is decided per draw, and the decision is part of what a merge would
   // share, so resolve it here and hand the result to handle_draw_unmerged rather than deciding twice.
@@ -2382,25 +2417,29 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
            (nativeWheelLastDrawCommand == lastDraw && nativeWheelLastDecision == nativeWheel)))
         LIKELY {
           const auto& indexTemplate = cached_index_template(prim, vtxCount);
-          const auto indices = offset_index_template(indexTemplate, lastDraw->vtxCount);
-          const u32 numIndices = indexTemplate.indexCount;
-          const gfx::Range idxRange = gfx::push_indices(indices);
-          CHECK(lastDraw->vertRange.offset + lastDraw->vertRange.size == vertRange.offset,
-                "Non-consecutive vertex ranges ({} < {})", lastDraw->vertRange.offset + lastDraw->vertRange.size,
-                vertRange.offset);
-          CHECK(lastDraw->idxRange.offset + lastDraw->idxRange.size == idxRange.offset,
-                "Non-consecutive index ranges ({} < {})", lastDraw->idxRange.offset + lastDraw->idxRange.size,
-                idxRange.offset);
-          lastDraw->vertRange.size += vertRange.size;
-          lastDraw->idxRange.size += idxRange.size;
-          lastDraw->vtxCount += vtxCount;
-          lastDraw->indexCount += numIndices;
-          ++gfx::g_mergedDrawCallCount;
-          // This primitive now renders through the draw we merged into, so its palette slots belong to that draw's
-          // interpolation snapshot as well.
-          if (s_lastDrawRecordedInterpolation)
-            UNLIKELY { extend_interpolation_draw(pn_mtx_mask(vertices, vtxCount, vtxSize)); }
-          return true;
+          // Not even a merge may push past the index staging; handle_draw_unmerged skips the draw instead.
+          if (gfx::index_staging_room() >= indexTemplate.indices.size() * sizeof(u16))
+            LIKELY {
+              const auto indices = offset_index_template(indexTemplate, lastDraw->vtxCount);
+              const u32 numIndices = indexTemplate.indexCount;
+              const gfx::Range idxRange = gfx::push_indices(indices);
+              CHECK(lastDraw->vertRange.offset + lastDraw->vertRange.size == vertRange.offset,
+                    "Non-consecutive vertex ranges ({} < {})", lastDraw->vertRange.offset + lastDraw->vertRange.size,
+                    vertRange.offset);
+              CHECK(lastDraw->idxRange.offset + lastDraw->idxRange.size == idxRange.offset,
+                    "Non-consecutive index ranges ({} < {})", lastDraw->idxRange.offset + lastDraw->idxRange.size,
+                    idxRange.offset);
+              lastDraw->vertRange.size += vertRange.size;
+              lastDraw->idxRange.size += idxRange.size;
+              lastDraw->vtxCount += vtxCount;
+              lastDraw->indexCount += numIndices;
+              ++gfx::g_mergedDrawCallCount;
+              // This primitive now renders through the draw we merged into, so its palette slots belong to that
+              // draw's interpolation snapshot as well.
+              if (s_lastDrawRecordedInterpolation)
+                UNLIKELY { extend_interpolation_draw(pn_mtx_mask(vertices, vtxCount, vtxSize)); }
+              return true;
+            }
         }
     }
 
@@ -2428,6 +2467,12 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
   // only cost a recursive re-entry.
   const auto& indexTemplate = cached_index_template(prim, vtxCount);
   const u32 numIndices = indexTemplate.indexCount;
+  if (gfx::index_staging_room() < indexTemplate.indices.size() * sizeof(u16))
+    UNLIKELY {
+      // Its vertices are staged already and go unread; the index staging cannot grow (see stage_plain_vertices).
+      note_skipped_draw();
+      return;
+    }
   const gfx::Range idxRange =
       gfx::push_indices(ArrayRef<u16>{indexTemplate.indices.data(), indexTemplate.indices.size()});
 

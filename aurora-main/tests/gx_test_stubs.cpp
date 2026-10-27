@@ -303,6 +303,10 @@ Range push_indices(const uint8_t* data, size_t length) {
 }
 Range push_uniform(const uint8_t* data, size_t length) { return {}; }
 Range push_storage(const uint8_t* data, size_t length) { return {}; }
+StagingStats g_stagingStats;
+size_t vertex_staging_room() noexcept { return VertexBufferSize; }
+size_t index_staging_room() noexcept { return IndexBufferSize; }
+void staging_overflow_abort(size_t, size_t) noexcept { std::abort(); }
 std::pair<ByteBuffer, Range> map_uniform(size_t length) {
   s_uniformAllocations.emplace_back(length, 0);
   auto& uniformBytes = s_uniformAllocations.back();

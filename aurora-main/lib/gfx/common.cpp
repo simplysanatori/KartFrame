@@ -158,6 +158,7 @@ wgpu::BindGroup g_uniformBindGroup;
 
 // for imgui debug
 AuroraStats g_stats{};
+StagingStats g_stagingStats;
 uint32_t g_drawCallCount = 0;
 uint32_t g_mergedDrawCallCount = 0;
 
@@ -2073,6 +2074,13 @@ static bool end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame,
   g_stats.lastVertSize = writeBuffer(g_verts, g_vertexBuffer, VertexBufferSize, "Vertex");
   g_stats.lastUniformSize = writeBuffer(g_uniforms, g_uniformBuffer, UniformBufferSize, "Uniform");
   g_stats.lastIndexSize = writeBuffer(g_indices, g_indexBuffer, IndexBufferSize, "Index");
+  // Only this thread raises them; the periodic log line takes them with an exchange.
+  if (g_stats.lastVertSize > g_stagingStats.peakVertexBytes.load(std::memory_order_relaxed)) {
+    g_stagingStats.peakVertexBytes.store(static_cast<uint32_t>(g_stats.lastVertSize), std::memory_order_relaxed);
+  }
+  if (g_stats.lastIndexSize > g_stagingStats.peakIndexBytes.load(std::memory_order_relaxed)) {
+    g_stagingStats.peakIndexBytes.store(static_cast<uint32_t>(g_stats.lastIndexSize), std::memory_order_relaxed);
+  }
   g_stats.lastStorageSize = writeBuffer(g_storage, g_storageBuffer, StorageBufferSize, "Storage");
   if constexpr (UseTextureBuffer) {
     g_stats.lastTextureUploadSize = g_textureUpload.size();
@@ -3471,6 +3479,20 @@ Range push_verts(const uint8_t* data, size_t length) { return push(g_verts, data
 Range push_indices(const uint8_t* data, size_t length) { return push(g_indices, data, length, 0); }
 Range push_uniform(const uint8_t* data, size_t length) {
   return push(g_uniforms, data, length, g_cachedLimits.minUniformBufferOffsetAlignment);
+}
+size_t vertex_staging_room() noexcept {
+  return g_verts.capacity() > g_verts.size() ? g_verts.capacity() - g_verts.size() : 0;
+}
+size_t index_staging_room() noexcept {
+  return g_indices.capacity() > g_indices.size() ? g_indices.capacity() - g_indices.size() : 0;
+}
+void staging_overflow_abort(size_t requested, size_t capacity) noexcept {
+  // The region that overflowed is the one whose use matches its size.
+  Log.fatal("Frame staging overflow: {} bytes needed in a mapped region of {} (vertex staging {} of {} KiB in use, "
+            "index {} of {} KiB, uniform {} of {} KiB, storage {} of {} KiB)",
+            requested, capacity, g_verts.size() >> 10, VertexBufferSize >> 10, g_indices.size() >> 10,
+            IndexBufferSize >> 10, g_uniforms.size() >> 10, UniformBufferSize >> 10, g_storage.size() >> 10,
+            StorageBufferSize >> 10);
 }
 Range push_storage(const uint8_t* data, size_t length) {
   return push(g_storage, data, length, g_cachedLimits.minStorageBufferOffsetAlignment);
