@@ -168,6 +168,13 @@ as the doubled default and is clean, so the phase is not the cause; the remainin
 of GPU work the game submits right after each hand-over on the GPU the compositor composes on. That is the
 next experiment (the probe with synthetic GPU load; lane Y, unfinished).
 
+Session 21 (2026-10-27): with both eyes in one swapchain image per set (`KARTFRAME_STEREO_PACKED=1`) the
+race was clean with the end lock, and also clean with the lock off, where the old right-eye double image did
+not appear. That fits the per-eye pick-up model: the compositor takes each eye's newest released image at its
+own point in the refresh, and one image per set removes the chance of pairing a right eye from one set with a
+left eye from another. Clean in one session each, so a follow-up A B A B of full races (packed against
+per-eye) is pending (`frame/perf/session-h22/`). The wrapper now defaults to packed with the end lock kept.
+
 ## Building
 
 Needs an Arm64 Linux machine with a compiler, CMake and Ninja (the Frame needs them installed; the release does not). The steps for developers, in short, are in [frame/DEV.md](../frame/DEV.md):

@@ -46,7 +46,9 @@ Twenty sessions of measurement, each one eliminating something by a direct test,
 
 What this build does about it: the launch wrapper runs a small helper that reads SteamVR's compositor timing and publishes its grid, and the game hands every frame over at a fixed point against that grid, just after the compositor's update (`KARTFRAME_END_PHASE=after`, the default). The doubling is gone with that. What remains, and why this is a mitigation rather than a fix: the right eye runs one set ahead of the left, which reads as the right eye being a touch more sensitive to head movement, and the compositor shows a frame twice now and then. The probe hands its frames over at the same point as the old default and is clean, so the point itself is not the cause; the remaining difference is the 4 to 7 ms of GPU work the game submits right after each hand-over on the GPU the compositor also composes on. That is the next experiment. The records of every session are in `frame/perf/`, and the mechanism is written up in the [technical notes](docs/TECHNICAL_NOTES.md).
 
-If you want the old behaviour to compare, put `KARTFRAME_END_PHASE=off` in `session.env` for one launch.
+Session 21 added a second switch, now on by default: `KARTFRAME_STEREO_PACKED=1` puts both eyes of a set in one swapchain image, so the compositor can only ever show the two eyes of the same set. With it the race was clean in the headset together with the end lock, and also clean with the lock off, where the old right-eye doubling did not show. That is one session each; a longer A B A B comparison against one swapchain per eye is still to come, so treat it as promising, not settled.
+
+If you want the old behaviour to compare, put `KARTFRAME_END_PHASE=off` and/or `KARTFRAME_STEREO_PACKED=0` in `session.env` for one launch.
 
 ## What has been done so far
 
@@ -155,6 +157,7 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | `KARTFRAME_SYSMEM` | 0 turns off the GPU's direct memory rendering mode (`TU_DEBUG=sysmem`); it is on by default |
 | `KARTFRAME_FDM_LAYER` | 0 disables Valve's foveation layer in the Vulkan chain, to compare |
 | `KARTFRAME_END_PHASE` | `after` (default), `before`, or `off`: when in the refresh each frame is handed to SteamVR, against the compositor grid the wrapper's helper publishes. `off` hands over at the wake-up, which doubles the image |
+| `KARTFRAME_STEREO_PACKED` | `1` (default) puts both eyes of a set in one 3456x1728 swapchain image, released once. `0` or `off` goes back to one swapchain per eye, to compare; that is the layout with the right-eye double image |
 | `KARTFRAME_END_DELAY_US` | A fixed delay after the wake-up instead of the grid, in microseconds; also the fallback when the grid is missing (4000) |
 | `KARTFRAME_VRTIMING_FRAMES` | 1 logs every compositor frame to `vrframes.log` in the session folder |
 | `KARTFRAME_HOME` | The data folder, if it is not `~/.local/share/KartFrame` |

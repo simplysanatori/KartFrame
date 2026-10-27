@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Both eyes of a set now share one swapchain image by default (`KARTFRAME_STEREO_PACKED=1`, set by the launch wrapper; the game itself still defaults to off when run without it). In headset session 21 this was clean in a race with the end lock and also without it. `KARTFRAME_STEREO_PACKED=0` in `session.env` goes back to one swapchain per eye. Clean in one session each; the long A B A B comparison is pending.
+- `frame/tools/phase.py` no longer stops on XRF lines with another log line glued on after `t=`.
+
 ## 0.9.0-alpha.1 (October 2026), pre-release
 
 The first public build of the native port. Everything below has been played on a Steam Frame unless marked

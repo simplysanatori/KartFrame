@@ -10,6 +10,8 @@ and the release notes. Twenty headset sessions have confirmed most of the build;
 - The Time Trial ghost drawn in 3D (it is flat today, a known issue).
 - Two and four player races at 120 Hz (heavier; measured in the mock only: 2p 113 sets/s, 6 % late).
 
+- Packed stereo swapchain (`KARTFRAME_STEREO_PACKED=1`, the wrapper default since session 21) over full 3-lap races: clean in one short session each with and without the end lock; the A B A B against per-eye is queued (session h22). Also: no seam or foveation artefact was reported in session 21, but not looked for over a long race.
+
 ## Screen and menus
 
 - The laser pointer's dot on the 2D menu screen (the ray shows, the dot on the screen does not yet).
