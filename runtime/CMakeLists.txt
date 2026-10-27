@@ -444,6 +444,13 @@ target_include_directories(mkw_vr_config_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR
 target_link_libraries(mkw_vr_config_tests PRIVATE mkw::toml11)
 target_compile_features(mkw_vr_config_tests PRIVATE cxx_std_20)
 add_test(NAME mkw_vr_config_tests COMMAND mkw_vr_config_tests)
+# Resident geometry (lane AC): aurora's geometry cache is self-contained, so its validation and block
+# bookkeeping are checked here without a GPU.
+add_executable(mkw_geometry_cache_tests tests/geometry_cache_tests.cpp
+    "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/lib/gx/geometry_cache.cpp")
+target_include_directories(mkw_geometry_cache_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/lib")
+target_compile_features(mkw_geometry_cache_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_geometry_cache_tests COMMAND mkw_geometry_cache_tests)
 add_executable(mkw_platform_paths_tests "${CMAKE_CURRENT_LIST_DIR}/tests/platform_paths_tests.cpp")
 target_link_libraries(mkw_platform_paths_tests PRIVATE mkw_platform)
 target_compile_features(mkw_platform_paths_tests PRIVATE cxx_std_17)

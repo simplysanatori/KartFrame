@@ -273,6 +273,9 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
         MkwVRPolicyPublishScene(scene);
         MkwVRPolicyInvalidateRaceCamera();
         MkwVRFirstPersonReset();
+        // The course and its karts go with the race: the display lists the geometry
+        // cache kept for them (resident geometry, off by default) go at the next frame.
+        aurora_request_geometry_cache_clear();
         RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] exited RaceScene at frame " << frame
                                << std::endl;
         break;

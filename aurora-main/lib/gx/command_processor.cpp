@@ -6,6 +6,9 @@
 #include "dolphin/gx/GXAurora.h"
 #include "gx.hpp"
 #include "native_wheel.hpp"
+#include "geometry_cache.hpp"
+#include "native_vertex.hpp"
+#include "../gfx/geometry_buffer.hpp"
 #include "gx_fmt.hpp"
 #include "pipeline.hpp"
 #include "shader_info.hpp"
@@ -1878,6 +1881,254 @@ static gfx::Range push_draw_vertices(const u8* vertices, u32 vtxCount, u32 vtxSi
   return range;
 }
 
+// Indexed vertex attributes resolved on the CPU (GXState::deindexVertices): the plan for the current vertex format
+// and arrays, mirroring populate_vertex_layout's resolved layout (gx.hpp deindexed_layout), and the FIFO records
+// rewritten with the array elements inline. The GPU then reads one aligned record per vertex instead of an index and
+// a dependent array fetch; the records are also what the resident geometry cache keeps. Ported from the
+// iChris4/Wiicompiled_VR fork (b5d9c19, GPL-3.0).
+struct DeindexAttr {
+  const u8* data = nullptr; // the array; null for direct data
+  u32 size = 0;
+  u32 stride = 0;
+  u16 srcOffset = 0; // of the index, or the direct data, in the FIFO record
+  u16 dstOffset = 0; // in the resolved record
+  u8 bytes = 0;      // per index: the element, or one slice of it (NBT3)
+  u8 indexSize = 0;  // 0: direct data, copied as it is
+  u8 indices = 1;    // 3 for GX_NRM_NBT3, one per slice
+};
+struct DeindexPlan {
+  GXVtxFmt fmt = GX_MAX_VTXFMT;
+  u32 generation = 0; // GXState::pipelineStateGeneration the plan was built for
+  u32 srcStride = 0;
+  u32 dstStride = 0;
+  bool active = false; // any indexed attribute
+  u32 count = 0;
+  std::array<DeindexAttr, GX_VA_TEX7 + 1> attrs{};
+};
+static_assert(GX_VA_TEX7 + 1 == geometry_cache::kMaxAttributes);
+static DeindexPlan sDeindexPlan;
+
+// Rebuilt after any pipeline-state write (array bases and strides, descriptors and formats all bump the generation),
+// so the strips of one shape reuse it.
+static const DeindexPlan& deindex_plan(GXVtxFmt fmt) noexcept {
+  auto& plan = sDeindexPlan;
+  if (plan.fmt == fmt && plan.generation == g_gxState.pipelineStateGeneration) {
+    return plan;
+  }
+  plan.fmt = fmt;
+  plan.generation = g_gxState.pipelineStateGeneration;
+  plan.count = 0;
+  plan.active = false;
+  const auto& vtxFmt = g_gxState.vtxFmts[fmt];
+  const bool aligned = deindexed_layout();
+  u32 src = 0;
+  u32 dst = 0;
+  for (int i = GX_VA_PNMTXIDX; i <= GX_VA_TEX7; ++i) {
+    const auto attr = static_cast<GXAttr>(i);
+    const auto type = g_gxState.vtxDesc[i];
+    if (type == GX_NONE) {
+      continue;
+    }
+    if (aligned) {
+      dst = AURORA_ALIGN(dst, deindexed_attr_align(attr));
+    }
+    const auto& attrFmt = vtxFmt.attrs[i];
+    const u32 compSize = comp_type_size(attr, attrFmt.type);
+    const u32 cnt = comp_cnt_count(attr, attrFmt.cnt);
+    const bool nbt3 = attr == GX_VA_NRM && attrFmt.cnt == GX_NRM_NBT3;
+    auto& a = plan.attrs[plan.count++];
+    a = {};
+    a.srcOffset = static_cast<u16>(src);
+    a.dstOffset = static_cast<u16>(dst);
+    if (type == GX_DIRECT) {
+      a.bytes = static_cast<u8>(compSize * cnt);
+      src += a.bytes;
+      dst += a.bytes;
+      continue;
+    }
+    const auto& array = g_gxState.arrays[i];
+    a.data = static_cast<const u8*>(array.data);
+    a.size = array.size;
+    a.stride = array.stride;
+    a.indexSize = type == GX_INDEX8 ? 1 : 2;
+    a.indices = nbt3 ? 3 : 1;
+    a.bytes = static_cast<u8>(compSize * cnt / a.indices);
+    plan.active = true;
+    src += a.indexSize * a.indices;
+    dst += compSize * cnt;
+  }
+  plan.srcStride = src;
+  plan.dstStride = aligned ? AURORA_ALIGN(dst, 4u) : dst;
+  return plan;
+}
+
+// One attribute of `count` records: `Bytes` per element (0: a.bytes at run time), `IndexSize` bytes per big-endian
+// index (0: direct data, copied).
+template <u32 Bytes, u32 IndexSize>
+static void deindex_attr(const DeindexAttr& a, const u8* src, u32 srcStride, u32 count, u8* dst,
+                         u32 dstStride) noexcept {
+  const u32 bytes = Bytes != 0 ? Bytes : a.bytes;
+  src += a.srcOffset;
+  dst += a.dstOffset;
+  for (u32 v = 0; v < count; ++v, src += srcStride, dst += dstStride) {
+    if constexpr (IndexSize == 0) {
+      std::memcpy(dst, src, bytes);
+    } else {
+      const u32 index = IndexSize == 1 ? src[0] : (static_cast<u32>(src[0]) << 8) | src[1];
+      const size_t offset = static_cast<size_t>(index) * a.stride;
+      if (a.data != nullptr && offset + bytes <= a.size)
+        LIKELY { std::memcpy(dst, a.data + offset, bytes); }
+      else {
+        // The storage path would read whatever follows the array.
+        std::memset(dst, 0, bytes);
+      }
+    }
+  }
+}
+
+template <u32 IndexSize>
+static void deindex_attr_sized(const DeindexAttr& a, const u8* src, u32 srcStride, u32 count, u8* dst,
+                               u32 dstStride) noexcept {
+  switch (a.bytes) {
+  case 1:
+    return deindex_attr<1, IndexSize>(a, src, srcStride, count, dst, dstStride);
+  case 2:
+    return deindex_attr<2, IndexSize>(a, src, srcStride, count, dst, dstStride);
+  case 4:
+    return deindex_attr<4, IndexSize>(a, src, srcStride, count, dst, dstStride);
+  case 6:
+    return deindex_attr<6, IndexSize>(a, src, srcStride, count, dst, dstStride);
+  case 8:
+    return deindex_attr<8, IndexSize>(a, src, srcStride, count, dst, dstStride);
+  case 12:
+    return deindex_attr<12, IndexSize>(a, src, srcStride, count, dst, dstStride);
+  default:
+    return deindex_attr<0, IndexSize>(a, src, srcStride, count, dst, dstStride);
+  }
+}
+
+// `count` FIFO records at `src` resolved into records at `dst`, attribute by attribute. An index past its array reads
+// as zeros. The alignment gaps between attributes are left as they were (no shader reads them).
+static void deindex_records(const DeindexPlan& plan, const u8* src, u32 count, u8* dst) noexcept {
+  for (u32 k = 0; k < plan.count; ++k) {
+    const auto& a = plan.attrs[k];
+    if (a.indices != 1) {
+      // GX_NRM_NBT3: three indices, one per 3-vector slice, each slice `bytes` into its array element.
+      for (u32 s = 0; s < a.indices; ++s) {
+        DeindexAttr slice = a;
+        slice.srcOffset = static_cast<u16>(a.srcOffset + s * a.indexSize);
+        slice.dstOffset = static_cast<u16>(a.dstOffset + s * a.bytes);
+        slice.data = a.data != nullptr ? a.data + s * a.bytes : nullptr;
+        slice.size = a.size > s * a.bytes ? a.size - s * a.bytes : 0;
+        slice.indices = 1;
+        if (a.indexSize == 1) {
+          deindex_attr_sized<1>(slice, src, plan.srcStride, count, dst, plan.dstStride);
+        } else {
+          deindex_attr_sized<2>(slice, src, plan.srcStride, count, dst, plan.dstStride);
+        }
+      }
+      continue;
+    }
+    switch (a.indexSize) {
+    case 0:
+      deindex_attr_sized<0>(a, src, plan.srcStride, count, dst, plan.dstStride);
+      break;
+    case 1:
+      deindex_attr_sized<1>(a, src, plan.srcStride, count, dst, plan.dstStride);
+      break;
+    default:
+      deindex_attr_sized<2>(a, src, plan.srcStride, count, dst, plan.dstStride);
+      break;
+    }
+  }
+}
+
+// The draw's records resolved straight into the frame's vertex staging. A native steering wheel replacement
+// (native_wheel.hpp) stands in for the position array it animates, so the resolved records carry the turned wheel.
+static gfx::Range push_deindexed_vertices(const DeindexPlan& plan, const u8* vertices, u32 vtxCount,
+                                          const NativeWheelArray* nativeWheel) {
+  auto [buffer, range] = gfx::map_verts(static_cast<size_t>(vtxCount) * plan.dstStride);
+  if (nativeWheel != nullptr)
+    UNLIKELY {
+      DeindexPlan animated = plan;
+      for (u32 k = 0; k < animated.count; ++k) {
+        auto& a = animated.attrs[k];
+        if (a.data == static_cast<const u8*>(nativeWheel->source) && a.indexSize != 0) {
+          a.data = nativeWheel->bytes.data();
+          a.size = static_cast<u32>(std::min<size_t>(a.size, nativeWheel->bytes.size()));
+        }
+      }
+      deindex_records(animated, vertices, vtxCount, buffer.data());
+      return range;
+    }
+  deindex_records(plan, vertices, vtxCount, buffer.data());
+  return range;
+}
+
+// The vertex-input mode of the draw being recorded (ShaderConfig::nativeVertices). A change dirties the state so the
+// draw starts a new command with its own pipeline; the pipeline memo keeps one resolution per mode.
+static void select_native_vertices(bool native) noexcept {
+  if (g_gxState.nativeVertices != native)
+    UNLIKELY {
+      g_gxState.nativeVertices = native;
+      g_gxState.stateDirty = true;
+    }
+}
+
+// The draw's de-index plan, or null when it keeps its FIFO records (de-indexing off, or no indexed attribute).
+static const DeindexPlan* draw_deindex_plan(GXVtxFmt fmt) noexcept {
+  if (!g_gxState.deindexVertices)
+    LIKELY { return nullptr; }
+  const DeindexPlan& plan = deindex_plan(fmt);
+  return plan.active ? &plan : nullptr;
+}
+
+// A draw the frame's staging cannot hold is dropped: the vertex and index regions are mapped and cannot grow (a push
+// past the end aborts), and a frame that fills them is not one this renderer should take down (iChris4 e4c98da).
+static void note_skipped_draw() noexcept {
+  gfx::g_stagingStats.skippedDraws.fetch_add(1, std::memory_order_relaxed);
+  // Its bytes may sit in the staging after the last recorded draw's: the next draw must not merge into that one (the
+  // merge requires consecutive ranges).
+  g_gxState.stateDirty = true;
+  static u32 reports = 0;
+  if (reports < 20 || reports % 1000 == 0) {
+    Log.warn("Frame staging full: a draw was skipped ({} KiB of vertex staging free of {}, {} KiB of index staging "
+             "free of {})",
+             gfx::vertex_staging_room() >> 10, gfx::VertexBufferSize >> 10, gfx::index_staging_room() >> 10,
+             gfx::IndexBufferSize >> 10);
+  }
+  ++reports;
+}
+
+// A plain draw's vertices into the frame's vertex staging: de-indexed records while the plan asks and the staging can
+// hold them, else the FIFO records. De-indexed records are four to eight times their FIFO bytes, and a cold geometry
+// cache (the first frame of a race) resolves every list of the frame in place. Past three quarters of the staging the
+// frame's remaining draws keep their indexed FIFO records and the arrays' storage path, which the pipeline config
+// follows (the layout is part of every shader config, so this invalidates the pipeline-state memo as begin_frame_impl
+// does; de-indexing is latched again at the next frame), and the quarter left takes a whole frame of FIFO bytes. A
+// draw not even those fit is skipped. `plan` comes back null when the draw keeps its FIFO records. (iChris4 e4c98da.)
+static std::optional<gfx::Range> stage_plain_vertices(const DeindexPlan*& plan, const u8* vertices, u32 vtxCount,
+                                                      u32 vtxSize, const NativeWheelArray* nativeWheel) noexcept {
+  if (plan != nullptr) {
+    const size_t recordBytes = static_cast<size_t>(vtxCount) * plan->dstStride;
+    if (gfx::vertex_staging_room() >= recordBytes + gfx::VertexBufferSize / 4)
+      LIKELY { return push_deindexed_vertices(*plan, vertices, vtxCount, nativeWheel); }
+    g_gxState.deindexVertices = false;
+    g_gxState.pipelineStateGeneration = next_gx_state_epoch();
+    g_gxState.stateDirty = true;
+    gfx::g_stagingStats.deindexStops.fetch_add(1, std::memory_order_relaxed);
+    plan = nullptr;
+  }
+  // push_draw_vertices maps count * padded stride bytes.
+  const size_t fifoBytes = static_cast<size_t>(vtxCount) * padded_upload_stride(vtxSize);
+  if (gfx::vertex_staging_room() < fifoBytes)
+    UNLIKELY {
+      note_skipped_draw();
+      return std::nullopt;
+    }
+  return push_draw_vertices(vertices, vtxCount, vtxSize);
+}
+
 // Uploads an indexed vertex array with elements `uploadStride` bytes apart (see padded_upload_stride). A padded upload
 // copies each element and zeroes its trailing bytes; a trailing partial element is copied as far as the array goes.
 static gfx::Range push_vertex_array(const AttrArray& array, u32 uploadStride) {
@@ -1929,10 +2180,36 @@ static u32 calculate_last_vtx_size(GXVtxFmt fmt) {
   return vtxSize;
 }
 
+// A draw resolved against the current GX state and pushed as a command: its pipeline, textures, uniform and stereo
+// siblings, and what frame interpolation needs to recognise it next frame. The plain draws (handle_draw_unmerged) and
+// the geometry cache's (draw_cached_geometry) share it. (iChris4 b5d9c19.)
+struct ResolvedDraw {
+  GXPrimitive prim;
+  GXVtxFmt fmt;
+  u32 vtxCount;
+  gfx::Range vertRange;
+  gfx::Range idxRange;
+  u32 numIndices;
+  u32 instanceCount;
+  const BindGroupRanges* ranges;
+  uint16_t usedPnMtxMask;
+  HashType matrixTopologySignature;
+  HashType geometrySignature;
+  bool interpolationIdentityActive;
+  // The draw command frame interpolation identifies: for a cached list its first draw command, as the uncached path
+  // would have recorded it, rather than the resolved whole.
+  u16 identityVtxCount;
+  GXPrimitive identityPrim;
+  std::optional<gfx::stereo_replay::SubviewRect> screenRect;
+  bool cachedGeometry;
+  bool nativeVertices;
+  NativeWheelArray* nativeWheel;
+};
+static void push_resolved_draw(const ResolvedDraw& draw);
 static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange,
                                  uint16_t usedPnMtxMask, HashType matrixTopologySignature, HashType geometrySignature,
                                  bool interpolationIdentityActive, const uint8_t* vertices, uint32_t vtxStride,
-                                 NativeWheelArray* nativeWheel);
+                                 NativeWheelArray* nativeWheel, bool deindexed);
 
 // The per-draw geometry signature, matrix-usage mask and draw-identity hashes exist purely to feed frame interpolation
 // (build_uniform consumes them only after its `frame_interpolation_fps() == 0` early-out).
@@ -2255,7 +2532,10 @@ static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtx
     GXPrimitive prim = static_cast<GXPrimitive>(0);
     GXVtxFmt fmt = static_cast<GXVtxFmt>(0);
   };
-  static Memo memo{};
+  // One memo per vertex-input mode (native vertex input is part of the config): the geometry cache's native draws and
+  // the plain draws between them keep their own resolution instead of evicting each other's.
+  static std::array<Memo, 2> memos{};
+  Memo& memo = memos[g_gxState.nativeVertices ? 1 : 0];
 
   const u32 sampleCount = gfx::get_sample_count();
   const u32 generation = g_gxState.pipelineStateGeneration;
@@ -2326,13 +2606,18 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
 
   // This entry point bypasses process(), so it owns the renderer lock itself.
   std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
-  const gfx::Range vertRange = push_draw_vertices(vertices, vtxCount, vtxSize);
+  select_native_vertices(false);
+  NativeWheelArray* const nativeWheel = resolve_native_wheel(fmt, vertices, vtxCount, vtxSize);
+  const DeindexPlan* plan = draw_deindex_plan(fmt);
+  const std::optional<gfx::Range> staged = stage_plain_vertices(plan, vertices, vtxCount, vtxSize, nativeWheel);
+  if (!staged)
+    UNLIKELY { return true; }
+  const gfx::Range vertRange = *staged;
   const bool interpolationIdentityActive = frame_interpolation_identity_needed();
   const PnMtxUsage matrixUsage = interpolationIdentityActive ? pn_mtx_usage(vertices, vtxCount, vtxSize) : PnMtxUsage{};
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive, vertices, vtxSize,
-                       resolve_native_wheel(fmt, vertices, vtxCount, vtxSize));
+                       interpolationIdentityActive, vertices, vtxSize, nativeWheel, plan != nullptr);
   return true;
 }
 
@@ -2362,12 +2647,19 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
 
   // Push raw vertex data to buffer
   const uint8_t* vertices = data + pos;
-  gfx::Range vertRange = push_draw_vertices(vertices, vtxCount, vtxSize);
   pos += totalVtxBytes;
+  select_native_vertices(false);
 
   // The animated vertex array this draw takes is decided per draw, and the decision is part of what a merge would
   // share, so resolve it here and hand the result to handle_draw_unmerged rather than deciding twice.
   NativeWheelArray* const nativeWheel = resolve_native_wheel(fmt, vertices, vtxCount, vtxSize);
+
+  // The vertex data: indexed attributes resolved into flat aligned records (deindex_plan), else the raw FIFO records.
+  const DeindexPlan* plan = draw_deindex_plan(fmt);
+  const std::optional<gfx::Range> staged = stage_plain_vertices(plan, vertices, vtxCount, vtxSize, nativeWheel);
+  if (!staged)
+    UNLIKELY { return true; }
+  const gfx::Range vertRange = *staged;
 
   // Try to merge with previous draw call.
   if (!g_gxState.stateDirty && !(aurora::stereo_frame_provider_active() && g_gxState.projType == GX_ORTHOGRAPHIC))
@@ -2376,31 +2668,35 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
       // Only if the previous draw call was a single instance draw (no lines/points handling), and only into a draw
       // that resolved the same animated array: the merged whole renders through that draw's binding. Anything the
       // decision cache cannot vouch for (a command it was not recorded against) stays unmerged.
-      if (lastDraw != nullptr && prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS &&
-          lastDraw->instanceCount == 1 &&
+      if (lastDraw != nullptr && !lastDraw->cachedGeometry && prim != GX_LINES && prim != GX_LINESTRIP &&
+          prim != GX_POINTS && lastDraw->instanceCount == 1 &&
           (nativeWheelArrays.empty() ||
            (nativeWheelLastDrawCommand == lastDraw && nativeWheelLastDecision == nativeWheel)))
         LIKELY {
           const auto& indexTemplate = cached_index_template(prim, vtxCount);
-          const auto indices = offset_index_template(indexTemplate, lastDraw->vtxCount);
-          const u32 numIndices = indexTemplate.indexCount;
-          const gfx::Range idxRange = gfx::push_indices(indices);
-          CHECK(lastDraw->vertRange.offset + lastDraw->vertRange.size == vertRange.offset,
-                "Non-consecutive vertex ranges ({} < {})", lastDraw->vertRange.offset + lastDraw->vertRange.size,
-                vertRange.offset);
-          CHECK(lastDraw->idxRange.offset + lastDraw->idxRange.size == idxRange.offset,
-                "Non-consecutive index ranges ({} < {})", lastDraw->idxRange.offset + lastDraw->idxRange.size,
-                idxRange.offset);
-          lastDraw->vertRange.size += vertRange.size;
-          lastDraw->idxRange.size += idxRange.size;
-          lastDraw->vtxCount += vtxCount;
-          lastDraw->indexCount += numIndices;
-          ++gfx::g_mergedDrawCallCount;
-          // This primitive now renders through the draw we merged into, so its palette slots belong to that draw's
-          // interpolation snapshot as well.
-          if (s_lastDrawRecordedInterpolation)
-            UNLIKELY { extend_interpolation_draw(pn_mtx_mask(vertices, vtxCount, vtxSize)); }
-          return true;
+          // Not even a merge may push past the index staging; handle_draw_unmerged skips the draw instead.
+          if (gfx::index_staging_room() >= indexTemplate.indices.size() * sizeof(u16))
+            LIKELY {
+              const auto indices = offset_index_template(indexTemplate, lastDraw->vtxCount);
+              const u32 numIndices = indexTemplate.indexCount;
+              const gfx::Range idxRange = gfx::push_indices(indices);
+              CHECK(lastDraw->vertRange.offset + lastDraw->vertRange.size == vertRange.offset,
+                    "Non-consecutive vertex ranges ({} < {})", lastDraw->vertRange.offset + lastDraw->vertRange.size,
+                    vertRange.offset);
+              CHECK(lastDraw->idxRange.offset + lastDraw->idxRange.size == idxRange.offset,
+                    "Non-consecutive index ranges ({} < {})", lastDraw->idxRange.offset + lastDraw->idxRange.size,
+                    idxRange.offset);
+              lastDraw->vertRange.size += vertRange.size;
+              lastDraw->idxRange.size += idxRange.size;
+              lastDraw->vtxCount += vtxCount;
+              lastDraw->indexCount += numIndices;
+              ++gfx::g_mergedDrawCallCount;
+              // This primitive now renders through the draw we merged into, so its palette slots belong to that
+              // draw's interpolation snapshot as well.
+              if (s_lastDrawRecordedInterpolation)
+                UNLIKELY { extend_interpolation_draw(pn_mtx_mask(vertices, vtxCount, vtxSize)); }
+              return true;
+            }
         }
     }
 
@@ -2408,14 +2704,14 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   const PnMtxUsage matrixUsage = interpolationIdentityActive ? pn_mtx_usage(vertices, vtxCount, vtxSize) : PnMtxUsage{};
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive, vertices, vtxSize, nativeWheel);
+                       interpolationIdentityActive, vertices, vtxSize, nativeWheel, plan != nullptr);
   return true;
 }
 
 static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange,
                                  uint16_t usedPnMtxMask, HashType matrixTopologySignature, HashType geometrySignature,
                                  bool interpolationIdentityActive, const uint8_t* vertices, uint32_t vtxStride,
-                                 NativeWheelArray* nativeWheel) {
+                                 NativeWheelArray* nativeWheel, bool deindexed) {
   ZoneScoped;
   // GX_CULL_ALL rasterizes nothing on hardware - no color, no depth.
   if (g_gxState.cullMode == GX_CULL_ALL && prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS)
@@ -2428,12 +2724,19 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
   // only cost a recursive re-entry.
   const auto& indexTemplate = cached_index_template(prim, vtxCount);
   const u32 numIndices = indexTemplate.indexCount;
+  if (gfx::index_staging_room() < indexTemplate.indices.size() * sizeof(u16))
+    UNLIKELY {
+      // Its vertices are staged already and go unread; the index staging cannot grow (see stage_plain_vertices).
+      note_skipped_draw();
+      return;
+    }
   const gfx::Range idxRange =
       gfx::push_indices(ArrayRef<u16>{indexTemplate.indices.data(), indexTemplate.indices.size()});
 
-  // Build pipeline, bind groups, and push draw command
+  // Build pipeline, bind groups, and push draw command. A de-indexed draw's records hold the array elements themselves,
+  // so it uploads no arrays and its shader never reads `array_start`.
   BindGroupRanges ranges{};
-  for (int i = GX_VA_POS; i <= GX_VA_TEX7; ++i) {
+  for (int i = GX_VA_POS; !deindexed && i <= GX_VA_TEX7; ++i) {
     if (g_gxState.vtxDesc[i] != GX_INDEX8 && g_gxState.vtxDesc[i] != GX_INDEX16) {
       continue;
     }
@@ -2467,7 +2770,38 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
     }
   }
 
-  const auto& pipelineState = resolve_pipeline_state(prim, fmt);
+  uint32_t instanceCount = 1;
+  if (prim == GX_LINES) {
+    instanceCount = vtxCount / 2;
+  } else if (prim == GX_LINESTRIP) {
+    instanceCount = vtxCount - 1;
+  } else if (prim == GX_POINTS) {
+    instanceCount = vtxCount;
+  }
+  push_resolved_draw(ResolvedDraw{
+      .prim = prim,
+      .fmt = fmt,
+      .vtxCount = vtxCount,
+      .vertRange = vertRange,
+      .idxRange = idxRange,
+      .numIndices = numIndices,
+      .instanceCount = instanceCount,
+      .ranges = &ranges,
+      .usedPnMtxMask = usedPnMtxMask,
+      .matrixTopologySignature = matrixTopologySignature,
+      .geometrySignature = geometrySignature,
+      .interpolationIdentityActive = interpolationIdentityActive,
+      .identityVtxCount = vtxCount,
+      .identityPrim = prim,
+      .screenRect = screen_rect(prim, fmt, vertices, vtxCount, vtxStride),
+      .cachedGeometry = false,
+      .nativeVertices = false,
+      .nativeWheel = nativeWheel,
+  });
+}
+
+static void push_resolved_draw(const ResolvedDraw& draw) {
+  const auto& pipelineState = resolve_pipeline_state(draw.prim, draw.fmt);
   const auto& info = pipelineState.shaderInfo;
 
   resolve_sampled_textures(info);
@@ -2479,23 +2813,24 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
   // Draw-identity hashing only feeds frame interpolation, and only for perspective draws: build_uniform reads the
   // identity exclusively past its `!perspective || frame_interpolation_fps() == 0` early-out.
   FrameInterpolationDrawIdentity drawIdentity{};
-  if (interpolationIdentityActive)
+  if (draw.interpolationIdentityActive)
     UNLIKELY {
-      const HashType drawShape = static_cast<HashType>(vtxCount) | (static_cast<HashType>(underlying(prim)) << 16) |
-                                 (static_cast<HashType>(underlying(fmt)) << 24);
+      const HashType drawShape = static_cast<HashType>(draw.identityVtxCount) |
+                                 (static_cast<HashType>(underlying(draw.identityPrim)) << 16) |
+                                 (static_cast<HashType>(underlying(draw.fmt)) << 24);
       const HashType pipelineDrawSignature = xxh3_hash(pipelineState.configHash, drawShape);
       const HashType textureSignature = xxh3_hash(bindGroups.textureBindGroup);
       const HashType materialAndTopology =
-          xxh3_hash(matrixTopologySignature, xxh3_hash(bindGroups.textureBindGroup, pipelineDrawSignature));
+          xxh3_hash(draw.matrixTopologySignature, xxh3_hash(bindGroups.textureBindGroup, pipelineDrawSignature));
       drawIdentity = FrameInterpolationDrawIdentity{
-          .combined = xxh3_hash(geometrySignature, materialAndTopology),
+          .combined = xxh3_hash(draw.geometrySignature, materialAndTopology),
           .pipeline = pipelineDrawSignature,
           .texture = textureSignature,
-          .matrixTopology = matrixTopologySignature,
+          .matrixTopology = draw.matrixTopologySignature,
       };
     }
   const bool perspective = g_gxState.projType == GX_PERSPECTIVE;
-  auto uniformRanges = build_uniform(info, vertRange.offset, ranges, drawIdentity, perspective, usedPnMtxMask);
+  auto uniformRanges = build_uniform(info, draw.vertRange.offset, *draw.ranges, drawIdentity, perspective, draw.usedPnMtxMask);
   if (!perspective && aurora::stereo_frame_provider_active()) {
     uniformRanges.replayLayout.worldHudDepth = aurora::gfx::get_stereo_hud_world_depth();
     const auto [anchorX, anchorY] = aurora::gfx::get_stereo_hud_world_anchor();
@@ -2506,17 +2841,9 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
   const bool stereo = aurora::stereo_frame_provider_active();
   const bool screen = !replayLayout.perspective && !replayLayout.nativeEfbEffect;
   if (stereo) resolve_replay_pipelines(pipelineState, screen);
-  s_lastDrawRecordedInterpolation = interpolationIdentityActive;
+  s_lastDrawRecordedInterpolation = draw.interpolationIdentityActive;
 
-  uint32_t instanceCount = 1;
-  if (prim == GX_LINES) {
-    instanceCount = vtxCount / 2;
-  } else if (prim == GX_LINESTRIP) {
-    instanceCount = vtxCount - 1;
-  } else if (prim == GX_POINTS) {
-    instanceCount = vtxCount;
-  }
-  const auto drawScreenRect = screen_rect(prim, fmt, vertices, vtxCount, vtxStride);
+  const auto& drawScreenRect = draw.screenRect;
   // Fades are blended over the picture (the respawn's black filter, wipes, the scene fader). Opaque and
   // logic-op full-frame quads are not: the race draws such quads every frame (backgrounds, a logic-op
   // pass), and one shown across the eye blacked it out. Nor is a textured one (lane I, 90 Hz headset
@@ -2586,27 +2913,431 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
       .exactScreenDepthPipeline = stereo && screen ? pipelineState.screenRef : 0,
       .stereoPipeline = stereo ? pipelineState.stereoRef : 0,
       .stereoScreenPipeline = stereo && screen ? pipelineState.stereoScreenRef : 0,
-      .vertRange = vertRange,
-      .idxRange = idxRange,
+      .vertRange = draw.vertRange,
+      .idxRange = draw.idxRange,
       .uniformRange = uniformRanges.current,
       .interpolatedUniformRanges = uniformRanges.interpolated,
       .stereoUniformRanges = {},
       .previousUniformRange = uniformRanges.previous,
       .uniformReplayLayout = uniformRanges.replayLayout,
-      .vtxCount = vtxCount,
-      .indexCount = numIndices,
-      .instanceCount = instanceCount,
+      .vtxCount = draw.vtxCount,
+      .indexCount = draw.numIndices,
+      .instanceCount = draw.instanceCount,
       .bindGroups = bindGroups,
       .dstAlpha = pipelineState.dstAlpha,
       .screenRect = drawScreenRect,
       .fadeCandidate = fadeCandidate,
       .invisible = stereo && invisible_blend(),
       .quadSignature = drawScreenRect ? quad_signature() : uint64_t{0},
+      .cachedGeometry = draw.cachedGeometry,
+      .nativeVertices = draw.nativeVertices,
   });
   // What the next draw must match to be allowed to fold into this one.
   nativeWheelLastDrawCommand = gfx::get_last_draw_command<DrawData>();
-  nativeWheelLastDecision = nativeWheel;
+  nativeWheelLastDecision = draw.nativeWheel;
   g_gxState.stateDirty = false;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Static display lists kept on the GPU across frames (geometry_cache.hpp; iChris4 b5d9c19). GXCallDisplayList's lists
+// arrive at process_display_list; the ones that only draw triangles of one format with indexed attributes are resolved
+// once into de-indexed records in the geometry buffer and drawn from there while the guest-RAM write tracking says
+// neither the list nor its arrays changed. Everything else, and every list while the cache is off, goes through
+// process().
+
+// The layout a cached list's records are resolved with (geometry_cache::Key::layout): the format, the arrays and where
+// each attribute lands.
+static u64 deindex_plan_hash(const DeindexPlan& plan) noexcept {
+  u64 hash = 1469598103934665603ull;
+  const auto mix = [&hash](u64 value) {
+    hash ^= value;
+    hash *= 1099511628211ull;
+  };
+  mix(plan.fmt);
+  mix(plan.srcStride);
+  mix(plan.dstStride);
+  mix(plan.count);
+  for (u32 i = 0; i < plan.count; ++i) {
+    const auto& a = plan.attrs[i];
+    mix(reinterpret_cast<uintptr_t>(a.data));
+    mix(a.size);
+    mix(a.stride);
+    mix(a.srcOffset);
+    mix(a.dstOffset);
+    mix(a.bytes);
+    mix(a.indexSize);
+    mix(a.indices);
+  }
+  return hash;
+}
+
+// A primitive's triangle-list indices, 32-bit, from vertex `base` on, in the order prepare_idx_template gives the
+// plain draws.
+static void append_list_indices(std::vector<u32>& out, GXPrimitive prim, u32 base, u16 vtxCount) noexcept {
+  switch (prim) {
+  case GX_QUADS:
+    for (u32 v = 0; v + 4 <= vtxCount; v += 4) {
+      out.insert(out.end(), {base + v, base + v + 1, base + v + 2, base + v + 2, base + v + 3, base + v});
+    }
+    break;
+  case GX_TRIANGLES:
+    for (u32 v = 0; v + 3 <= vtxCount; v += 3) {
+      out.insert(out.end(), {base + v, base + v + 1, base + v + 2});
+    }
+    break;
+  case GX_TRIANGLEFAN:
+    for (u32 v = 2; v < vtxCount; ++v) {
+      out.insert(out.end(), {base, base + v - 1, base + v});
+    }
+    break;
+  case GX_TRIANGLESTRIP:
+    for (u32 v = 2; v < vtxCount; ++v) {
+      if ((v & 1) == 0) {
+        out.insert(out.end(), {base + v - 2, base + v - 1, base + v});
+      } else {
+        out.insert(out.end(), {base + v - 1, base + v - 2, base + v});
+      }
+    }
+    break;
+  default:
+    break;
+  }
+}
+
+// A display list resolved for the cache: its draws' records de-indexed one after the other, their triangle-list
+// indices from the first record, and what frame interpolation needs of its first draw. False when it holds anything
+// but triangle draws of `fmt` (register writes, lines, points, another format).
+static bool resolve_display_list(const u8* data, u32 size, GXVtxFmt fmt, const DeindexPlan& plan,
+                                 std::vector<u8>& records, std::vector<u32>& indices,
+                                 geometry_cache::Entry& entry) noexcept {
+  u32 vertexCount = 0;
+  u32 pos = 0;
+  bool first = true;
+  while (pos < size) {
+    const u8 cmd = data[pos];
+    if (cmd == CP_CMD_NOP) {
+      ++pos;
+      continue;
+    }
+    if ((cmd & 0x80) == 0 || (cmd & CP_VAT_MASK) != fmt || size - pos < 3) {
+      return false;
+    }
+    const GXPrimitive prim = primitive_from_draw_cmd(cmd);
+    if (prim != GX_QUADS && prim != GX_TRIANGLES && prim != GX_TRIANGLESTRIP && prim != GX_TRIANGLEFAN) {
+      return false;
+    }
+    const u16 count = read_u16(data + pos + 1, true);
+    pos += 3;
+    const size_t bytes = static_cast<size_t>(count) * plan.srcStride;
+    if (bytes > size - pos) {
+      return false;
+    }
+    if (count != 0) {
+      const size_t at = records.size();
+      records.resize(at + static_cast<size_t>(count) * plan.dstStride);
+      deindex_records(plan, data + pos, count, records.data() + at);
+      append_list_indices(indices, prim, vertexCount, count);
+      entry.unionMask |= pn_mtx_mask(data + pos, count, plan.srcStride);
+      if (first) {
+        const PnMtxUsage usage = pn_mtx_usage(data + pos, count, plan.srcStride);
+        entry.firstMask = usage.mask;
+        entry.topologySignature = usage.topologySignature;
+        entry.geometrySignature = draw_geometry_signature(fmt, data + pos, count, plan.srcStride);
+        entry.firstPrim = static_cast<u8>(prim);
+        entry.firstVtxCount = count;
+        first = false;
+      }
+      vertexCount += count;
+    }
+    pos += bytes;
+  }
+  return vertexCount != 0 && !indices.empty();
+}
+
+// The last cached draw pushed unmerged, and what a cached draw must share to fold into it: its format and record
+// stride (no register write separates two lists of different formats, so stateDirty alone cannot tell).
+static const DrawData* sLastCachedDraw = nullptr;
+static GXVtxFmt sLastCachedFmt = GX_MAX_VTXFMT;
+static u32 sLastCachedStride = 0;
+
+// A cached list's draw: its indices into the frame's index staging, joined to the previous draw when that one reads
+// the cache under the same state (handle_draw's rules). Plain and cached draws never join: the records of one are in
+// the frame's vertex staging, the other's in the geometry buffer.
+static void draw_cached_geometry(GXVtxFmt fmt, const geometry_cache::Entry& entry) noexcept {
+  const bool interpolationIdentityActive = frame_interpolation_identity_needed();
+  if (g_gxState.nativeVertices) {
+    geometry_cache::g_nativeDraws.fetch_add(1, std::memory_order_relaxed);
+  }
+  // The slots the list's matrices come from: per vertex when it carries matrix indices (recorded at resolve), else
+  // the current matrix now, which the same list drawn for another kart may have moved.
+  const bool vertexMatrices = g_gxState.vtxDesc[GX_VA_PNMTXIDX] == GX_DIRECT;
+  const uint16_t currentMask = static_cast<uint16_t>(1u << std::min<uint32_t>(g_gxState.currentPnMtx, MaxPnMtx - 1));
+  const uint16_t unionMask = vertexMatrices ? entry.unionMask : currentMask;
+  if (!g_gxState.stateDirty && !(aurora::stereo_frame_provider_active() && g_gxState.projType == GX_ORTHOGRAPHIC))
+    LIKELY {
+      auto* lastDraw = gfx::get_last_draw_command<DrawData>();
+      if (lastDraw != nullptr && lastDraw == sLastCachedDraw && lastDraw->cachedGeometry &&
+          lastDraw->nativeVertices == g_gxState.nativeVertices && sLastCachedFmt == fmt &&
+          sLastCachedStride == entry.stride && lastDraw->instanceCount == 1)
+        LIKELY {
+          const gfx::Range idxRange = gfx::push_indices32(entry.indices.data(), entry.indices.size());
+          CHECK(lastDraw->idxRange.offset + lastDraw->idxRange.size == idxRange.offset,
+                "Non-consecutive index ranges ({} < {})", lastDraw->idxRange.offset + lastDraw->idxRange.size,
+                idxRange.offset);
+          lastDraw->idxRange.size += idxRange.size;
+          lastDraw->vtxCount += entry.vertexCount;
+          lastDraw->indexCount += static_cast<u32>(entry.indices.size());
+          ++gfx::g_mergedDrawCallCount;
+          if (s_lastDrawRecordedInterpolation)
+            UNLIKELY { extend_interpolation_draw(unionMask); }
+          return;
+        }
+    }
+  const gfx::Range idxRange = gfx::push_indices32(entry.indices.data(), entry.indices.size());
+  static const BindGroupRanges kNoArrays{};
+  push_resolved_draw(ResolvedDraw{
+      .prim = GX_TRIANGLES,
+      .fmt = fmt,
+      .vtxCount = entry.vertexCount,
+      // The indices are absolute into the geometry buffer: the records start at 0.
+      .vertRange = gfx::Range{0, entry.bytes},
+      .idxRange = idxRange,
+      .numIndices = static_cast<u32>(entry.indices.size()),
+      .instanceCount = 1,
+      .ranges = &kNoArrays,
+      .usedPnMtxMask = unionMask,
+      .matrixTopologySignature = vertexMatrices ? static_cast<HashType>(entry.topologySignature) : HashType{0},
+      .geometrySignature = static_cast<HashType>(entry.geometrySignature),
+      .interpolationIdentityActive = interpolationIdentityActive,
+      .identityVtxCount = entry.firstVtxCount,
+      .identityPrim = static_cast<GXPrimitive>(entry.firstPrim),
+      .screenRect = std::nullopt,
+      .cachedGeometry = true,
+      .nativeVertices = g_gxState.nativeVertices,
+      .nativeWheel = nullptr,
+  });
+  sLastCachedDraw = gfx::get_last_draw_command<DrawData>();
+  sLastCachedFmt = fmt;
+  sLastCachedStride = entry.stride;
+}
+
+// Whether a cached list's records take native vertex input (native_vertex.hpp) depends only on what the vertex layout
+// is built from: the descriptor, the format's attribute formats, the arrays' byte order and the de-indexing. Thousands
+// of lists a frame share a handful of these, so the decision is made once per combination.
+struct NativeVertexInputs {
+  std::array<u8, GX_VA_TEX7 + 1> type{};
+  std::array<u8, GX_VA_TEX7 + 1> cnt{};
+  std::array<u8, GX_VA_TEX7 + 1> comp{};
+  std::array<u8, GX_VA_TEX7 + 1> frac{};
+  std::array<u8, GX_VA_TEX7 + 1> le{};
+  u8 fmt = 0;
+  u8 deindex = 0;
+  bool operator==(const NativeVertexInputs& rhs) const { return std::memcmp(this, &rhs, sizeof(*this)) == 0; }
+};
+static_assert(std::has_unique_object_representations_v<NativeVertexInputs>);
+struct NativeVertexChoice {
+  bool native = false;
+  u32 vtxStride = 0;
+  u64 layoutSalt = 0;    // into the geometry cache key's layout when native
+  ShaderConfig source{}; // its attributes and stride, for native_vertex::convert
+};
+struct NativeVertexMemo {
+  NativeVertexInputs last{};
+  const NativeVertexChoice* lastChoice = nullptr;
+  absl::flat_hash_map<u64, std::pair<NativeVertexInputs, NativeVertexChoice>> choices;
+};
+static NativeVertexMemo sNativeVertexMemo;
+
+static NativeVertexInputs native_vertex_inputs(GXVtxFmt fmt) noexcept {
+  NativeVertexInputs in;
+  const auto& vtxFmt = g_gxState.vtxFmts[fmt];
+  for (int i = GX_VA_PNMTXIDX; i <= GX_VA_TEX7; ++i) {
+    const auto type = g_gxState.vtxDesc[i];
+    in.type[i] = static_cast<u8>(type);
+    if (type == GX_NONE) {
+      continue;
+    }
+    const auto& attrFmt = vtxFmt.attrs[i];
+    in.cnt[i] = static_cast<u8>(attrFmt.cnt);
+    in.comp[i] = static_cast<u8>(attrFmt.type);
+    in.frac[i] = attrFmt.frac;
+    in.le[i] = type != GX_DIRECT && g_gxState.arrays[i].le ? 1 : 0;
+  }
+  in.fmt = static_cast<u8>(fmt);
+  in.deindex = g_gxState.deindexVertices ? 1 : 0;
+  return in;
+}
+
+static const NativeVertexChoice& native_vertex_choice(GXVtxFmt fmt) noexcept {
+  auto& memo = sNativeVertexMemo;
+  const NativeVertexInputs inputs = native_vertex_inputs(fmt);
+  if (memo.lastChoice != nullptr && inputs == memo.last) {
+    return *memo.lastChoice;
+  }
+  const u64 hash = xxh3_hash(inputs);
+  auto it = memo.choices.find(hash);
+  if (it == memo.choices.end() || !(it->second.first == inputs)) {
+    NativeVertexChoice choice;
+    populate_vertex_layout(choice.source, fmt);
+    choice.native = native_vertex::layout(choice.source).valid;
+    choice.vtxStride = choice.source.vtxStride;
+    if (choice.native) {
+      choice.layoutSalt = xxh3_hash(choice.source.attrs) ^ 0x4e41544956455631ull;
+    }
+    // A hash collision replaces the other combination; it is decided again when it returns.
+    it = memo.choices.insert_or_assign(hash, std::pair{inputs, choice}).first;
+  }
+  // Only this function inserts, and it re-points the last choice after doing so: the pointer never outlives a rehash
+  // of the map's values.
+  memo.last = inputs;
+  memo.lastChoice = &it->second.second;
+  return *memo.lastChoice;
+}
+
+void process_display_list(const uint8_t* data, uint32_t size) {
+  ZoneScoped;
+  // Everything below reads and records renderer state, as process() does.
+  std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
+  const auto plain = [&] { process(data, size, true); };
+  // The cache needs de-indexed records and a buffer to keep them in (geometry_cache_mb 0 is the kill switch); 2D
+  // lists stay out of it (their draws are the virtual screen's, matched by screen_rect and never merged while stereo
+  // records).
+  if (!g_gxState.deindexVertices || size == 0 || g_gxState.projType != GX_PERSPECTIVE ||
+      gfx::ensure_geometry_buffer() == 0)
+    LIKELY { return plain(); }
+  // A shape's primitive list starts with a draw; a list that first writes registers is not one.
+  u32 first = 0;
+  while (first < size && data[first] == CP_CMD_NOP) {
+    ++first;
+  }
+  if (first >= size || (data[first] & 0x80) == 0) {
+    return plain();
+  }
+  const auto fmt = static_cast<GXVtxFmt>(data[first] & CP_VAT_MASK);
+  const DeindexPlan& plan = deindex_plan(fmt);
+  if (!plan.active) {
+    return plain();
+  }
+  // What handle_draw decides per draw holds for the whole list: one current matrix, one cull mode.
+  if (g_gxState.cullMode == GX_CULL_ALL) {
+    return;
+  }
+  if (!nativeWheelArrays.empty())
+    UNLIKELY {
+      // The wheel's animated copy stands in per draw (resolve_native_wheel), which the cache cannot do.
+      for (u32 k = 0; k < plan.count; ++k) {
+        if (plan.attrs[k].indexSize != 0 && native_wheel_source(plan.attrs[k].data)) {
+          return plain();
+        }
+      }
+    }
+  // Validity is sampled before any byte is read, so a racing guest write costs a re-resolve, never a stale hit.
+  const u64 listGeneration = guest_write_generation(data, size);
+  std::array<u64, geometry_cache::kMaxAttributes> arrayGenerations{};
+  bool untracked = listGeneration == kGuestWriteUntracked;
+  for (u32 k = 0; k < plan.count && !untracked; ++k) {
+    const auto& a = plan.attrs[k];
+    if (a.indexSize == 0) {
+      continue;
+    }
+    arrayGenerations[k] = guest_write_generation(a.data, a.size);
+    untracked = arrayGenerations[k] == kGuestWriteUntracked;
+  }
+  if (untracked) {
+    // Host scratch (a flattened list, a packed array) or memory outside the tracked guest RAM.
+    geometry_cache::g_inPlaceUntracked.fetch_add(1, std::memory_order_relaxed);
+    return plain();
+  }
+  // Native vertex input when the records' layout maps onto vertex formats: a different key, since the stored bytes
+  // differ (native_vertex::convert), decided here so hits and misses agree.
+  bool native = false;
+  u64 layoutHash = deindex_plan_hash(plan);
+  if (g_gxState.nativeVertexInputRequested) {
+    const NativeVertexChoice& choice = native_vertex_choice(fmt);
+    native = choice.native && choice.vtxStride == plan.dstStride;
+    if (native) {
+      layoutHash ^= choice.layoutSalt;
+    }
+  }
+  const geometry_cache::Key key{
+      .list = static_cast<u64>(reinterpret_cast<uintptr_t>(data)),
+      .layout = layoutHash,
+      .nbytes = size,
+  };
+  if (geometry_cache::is_volatile(key)) {
+    // The game rewrites this list every frame or so: resolving and uploading it each time would cost more than the
+    // plain path.
+    geometry_cache::g_inPlaceVolatile.fetch_add(1, std::memory_order_relaxed);
+    return plain();
+  }
+  geometry_cache::Entry* entry = geometry_cache::find(key);
+  if (entry != nullptr) {
+    const auto validity = geometry_cache::validate(*entry, listGeneration, {arrayGenerations.data(), plan.count},
+                                                   [&] { return static_cast<u64>(xxh3_hash_s(data, size)); });
+    if (validity == geometry_cache::Validity::Revalidated) {
+      geometry_cache::g_revalidated.fetch_add(1, std::memory_order_relaxed);
+    } else if (validity == geometry_cache::Validity::Changed) {
+      geometry_cache::erase(key);
+      geometry_cache::note_changed(key);
+      entry = nullptr;
+      geometry_cache::g_reresolved.fetch_add(1, std::memory_order_relaxed);
+      if (geometry_cache::is_volatile(key)) {
+        geometry_cache::g_inPlaceVolatile.fetch_add(1, std::memory_order_relaxed);
+        return plain();
+      }
+    }
+  }
+  if (entry == nullptr) {
+    static std::vector<u8> records;
+    static std::vector<u32> indices;
+    records.clear();
+    indices.clear();
+    geometry_cache::Entry fresh{};
+    fresh.stride = plan.dstStride;
+    if (!resolve_display_list(data, size, fmt, plan, records, indices, fresh)) {
+      geometry_cache::g_inPlaceUnsupported.fetch_add(1, std::memory_order_relaxed);
+      return plain();
+    }
+    // New lists upload through the frame's vertex staging. A burst of them (a race start) leaves the frame's plain
+    // draws a quarter of it and is cached over the next frames, drawn in place meanwhile.
+    if (gfx::vertex_staging_room() < records.size() + gfx::VertexBufferSize / 4) {
+      geometry_cache::g_inPlaceFull.fetch_add(1, std::memory_order_relaxed);
+      return plain();
+    }
+    if (native && !native_vertex::convert(native_vertex_choice(fmt).source, {records.data(), records.size()})) {
+      geometry_cache::g_inPlaceUnsupported.fetch_add(1, std::memory_order_relaxed);
+      return plain();
+    }
+    fresh.listGeneration = listGeneration;
+    fresh.listDigest = xxh3_hash_s(data, size);
+    std::copy(arrayGenerations.begin(), arrayGenerations.begin() + plan.count, fresh.arrayGenerations.begin());
+    geometry_cache::InsertResult result{};
+    entry = geometry_cache::insert(key, std::move(fresh), {records.data(), records.size()}, indices, &result);
+    if (entry == nullptr) {
+      if (result == geometry_cache::InsertResult::NoRoom) {
+        static bool logged = false;
+        if (!logged) {
+          logged = true;
+          Log.warn("Resident geometry: the cache is full ({:.1f} MiB resident); the lists beyond it draw the plain way",
+                   static_cast<double>(geometry_cache::stats().residentBytes) / (1024.0 * 1024.0));
+        }
+      }
+      geometry_cache::g_inPlaceFull.fetch_add(1, std::memory_order_relaxed);
+      return plain();
+    }
+    geometry_cache::g_misses.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    geometry_cache::g_hits.fetch_add(1, std::memory_order_relaxed);
+  }
+  // The list's 32-bit indices go through the frame's index staging, twice the bytes of the plain path's 16-bit
+  // templates (push_indices32 pads to a whole word first): a frame that fills it draws the rest in place.
+  if (gfx::index_staging_room() < entry->indices.size() * sizeof(u32) + sizeof(u32))
+    UNLIKELY {
+      geometry_cache::g_inPlaceFull.fetch_add(1, std::memory_order_relaxed);
+      return plain();
+    }
+  select_native_vertices(native);
+  draw_cached_geometry(fmt, *entry);
 }
 
 std::string read_string(const u8* data, u32& pos, u32 size, bool bigEndian) {

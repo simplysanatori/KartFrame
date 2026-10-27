@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <array>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -95,6 +96,12 @@ private:
   XXH3_state_t state;
 };
 
+namespace gfx {
+// A push past the end of a mapped staging region (ByteBuffer growth on a buffer it does not own): the regions'
+// fill goes to the log before the process aborts, where it used to abort without a word.
+[[noreturn]] void staging_overflow_abort(size_t requested, size_t capacity) noexcept;
+} // namespace gfx
+
 class ByteBuffer {
 public:
   ByteBuffer() noexcept = default;
@@ -134,6 +141,7 @@ public:
   [[nodiscard]] uint8_t* data() noexcept { return m_data; }
   [[nodiscard]] const uint8_t* data() const noexcept { return m_data; }
   [[nodiscard]] size_t size() const noexcept { return m_length; }
+  [[nodiscard]] size_t capacity() const noexcept { return m_capacity; }
   [[nodiscard]] bool empty() const noexcept { return m_length == 0; }
 
   void append(const void* data, size_t size) {
@@ -208,7 +216,7 @@ private:
     }
     if (size > m_capacity) {
       if (!m_owned) {
-        abort();
+        gfx::staging_overflow_abort(size, m_capacity);
       }
       // Exponential expansion to avoid O(n^2) time complexity.
       size_t capacity = size;
@@ -228,8 +236,11 @@ private:
 namespace aurora::gfx {
 inline constexpr bool UseTextureBuffer = false;
 inline constexpr uint64_t UniformBufferSize = 25165824;  // 24mb
-inline constexpr uint64_t VertexBufferSize = 3145728;    // 3mb
-inline constexpr uint64_t IndexBufferSize = 2097152;     // 2mb
+// A frame's de-indexed records (command_processor.cpp deindex_plan) are four to eight times its FIFO bytes, and the
+// geometry cache's 32-bit indices twice the plain path's 16-bit ones; a mapped region cannot grow, so the FIFO
+// processor keeps to these (stage_plain_vertices, note_skipped_draw). From the iChris4/Wiicompiled_VR fork (e4c98da).
+inline constexpr uint64_t VertexBufferSize = 8388608;    // 8mb
+inline constexpr uint64_t IndexBufferSize = 4194304;     // 4mb
 inline constexpr uint64_t StorageBufferSize = 8388608;   // 8mb
 inline constexpr uint64_t TextureUploadSize = 25165824;  // 24mb
 
@@ -579,6 +590,30 @@ static Range push_storage(const T& data) {
 Range push_texture_data(const uint8_t* data, size_t length, uint32_t bytesPerRow, uint32_t rowsPerImage);
 std::pair<ByteBuffer, Range> map_verts(size_t length);
 std::pair<ByteBuffer, Range> map_indices(size_t length);
+// 32-bit indices (the geometry cache's), 4-byte aligned in the same index staging.
+Range push_indices32(const uint32_t* data, size_t count);
+// GXState::deindexVertices for the next frames, latched at frame begin so a frame's draws agree (a change re-resolves
+// every pipeline, since the vertex layout is part of the shader config).
+void set_gx_deindex_vertices(bool value) noexcept;
+bool get_gx_deindex_vertices() noexcept;
+// GXState::nativeVertexInputRequested for the next frames: whether the geometry cache's lists may be drawn through
+// native vertex input (gx/native_vertex.hpp).
+void set_gx_native_vertex_input(bool value) noexcept;
+bool get_gx_native_vertex_input() noexcept;
+// The frame's vertex and index staging bytes still free (mapped regions of VertexBufferSize and IndexBufferSize that
+// cannot grow: a push past the end aborts).
+size_t vertex_staging_room() noexcept;
+size_t index_staging_room() noexcept;
+// What the frames' staging came to and what did not fit (command_processor.cpp): the high-water marks of the vertex
+// and index regions, the frames whose draws stopped de-indexing for want of vertex room and the draws skipped
+// because not even their FIFO bytes or indices fit. Read and reset by the periodic log line.
+struct StagingStats {
+  std::atomic<uint32_t> peakVertexBytes{0};
+  std::atomic<uint32_t> peakIndexBytes{0};
+  std::atomic<uint32_t> deindexStops{0};
+  std::atomic<uint32_t> skippedDraws{0};
+};
+extern StagingStats g_stagingStats;
 std::pair<ByteBuffer, Range> map_uniform(size_t length);
 std::pair<ByteBuffer, Range> copy_uniform(Range source);
 std::pair<ByteBuffer, Range> map_storage(size_t length);

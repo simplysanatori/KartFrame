@@ -39,6 +39,11 @@ struct DrawData {
   // Diagnostics (KARTFRAME_LOG_2D_QUADS): blend | logic << 2 | texgens << 6 | tex0 width << 10 | height << 21 |
   // tex0 is an EFB copy << 32.
   uint64_t quadSignature = 0;
+  // The records are in the geometry buffer (gx/geometry_cache.hpp), the indices 32-bit and absolute into it: group 0
+  // binds that buffer and the index buffer switches format for the draw.
+  bool cachedGeometry = false;
+  // The pipeline reads those records through vertex buffer 0 (gx/native_vertex.hpp).
+  bool nativeVertices = false;
 };
 
 constexpr uint32_t GXPipelineConfigVersion = 22;
@@ -66,6 +71,10 @@ struct PipelineConfig {
 };
 static_assert(std::has_unique_object_representations_v<PipelineConfig>);
 
+// A recipe with ShaderConfig::nativeVertices must describe records native_vertex::layout can map (pipeline.cpp); a
+// stored recipe that does not is dropped rather than compiled.
+bool valid_native_vertex_config(const ShaderConfig& config) noexcept;
+
 inline bool valid_pipeline_config(const PipelineConfig& config) noexcept {
   const auto in_range = [](auto value, auto maximum) {
     using Value = decltype(value);
@@ -74,7 +83,7 @@ inline bool valid_pipeline_config(const PipelineConfig& config) noexcept {
   };
   const bool validSamples =
       config.msaaSamples == 1 || config.msaaSamples == 2 || config.msaaSamples == 4 || config.msaaSamples == 8;
-  return config.version == GXPipelineConfigVersion && validSamples && config.stereoStencil <= 1 && in_range(config.depthFunc, GX_ALWAYS) &&
+  return config.version == GXPipelineConfigVersion && validSamples && valid_native_vertex_config(config.shaderConfig) && config.stereoStencil <= 1 && in_range(config.depthFunc, GX_ALWAYS) &&
          in_range(config.cullMode, GX_CULL_ALL) && in_range(config.blendMode, GX_BM_SUBTRACT) &&
          in_range(config.blendFacSrc, GX_BL_INVDSTALPHA) && in_range(config.blendFacDst, GX_BL_INVDSTALPHA) &&
          in_range(config.blendOp, GX_LO_SET) && in_range(config.pixelFmt, GX_PF_YUV420);
@@ -89,9 +98,15 @@ struct DrawEncodeState {
   gfx::PipelineRef currentPipeline = UINTPTR_MAX;
   // The bind group currently occupying slot 2.
   WGPUBindGroup boundTextureBindGroup = nullptr;
-  // The pass-wide index buffer binding is established lazily by the first indexed draw; every draw then addresses it
-  // with firstIndex instead of a per-draw SetIndexBuffer.
-  bool indexBufferBound = false;
+  // The index buffer binding is established lazily by the first indexed draw and re-bound only when the index format
+  // changes (16-bit for the frame's draws, 32-bit for the geometry cache's); every draw addresses it with firstIndex
+  // instead of a per-draw SetIndexBuffer.
+  wgpu::IndexFormat indexFormat = wgpu::IndexFormat::Undefined;
+  // Whether group 0 currently binds the geometry cache's buffer rather than the frame's vertex buffer (the pass starts
+  // with the latter bound).
+  bool geometryBound = false;
+  // Whether vertex buffer 0 (the geometry cache's buffer, for native vertex input) is bound in this pass.
+  bool vertexBufferBound = false;
 };
 
 void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, DrawEncodeState& state,

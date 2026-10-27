@@ -1,5 +1,7 @@
 #include "common.hpp"
+#include "../gx/geometry_cache.hpp"
 #include "../gx/shader_info.hpp"
+#include "geometry_buffer.hpp"
 
 #include "clear.hpp"
 #include "depth_peek.hpp"
@@ -158,6 +160,11 @@ wgpu::BindGroup g_uniformBindGroup;
 
 // for imgui debug
 AuroraStats g_stats{};
+// GXState::deindexVertices and nativeVertexInputRequested, latched in begin_frame_impl (resident geometry, off by
+// default; geometry_buffer.hpp).
+static std::atomic_bool g_gxDeindexVertices{false};
+static std::atomic_bool g_gxNativeVertexInput{false};
+StagingStats g_stagingStats;
 uint32_t g_drawCallCount = 0;
 uint32_t g_mergedDrawCallCount = 0;
 
@@ -1178,6 +1185,8 @@ void shutdown() {
   g_offscreenCache.clear();
   g_offscreenColor = {};
   g_offscreenDepth = {};
+  gx::geometry_cache::clear();
+  detail::shutdown_geometry_buffer();
   g_staticBindGroup = {};
   g_staticBindGroupLayout = {};
   g_uniformBindGroup = {};
@@ -1259,6 +1268,18 @@ static bool begin_frame_impl(bool clearEfb) {
 
   g_drawCallCount = 0;
   g_mergedDrawCallCount = 0;
+  // Resident geometry (geometry_buffer.hpp). The resolved vertex layout is part of every shader config, so the switch
+  // applies to whole frames and invalidates the pipeline-state memo like a register write would.
+  if (const bool deindex = g_gxDeindexVertices.load(std::memory_order_relaxed);
+      gx::g_gxState.deindexVertices != deindex) {
+    gx::g_gxState.deindexVertices = deindex;
+    gx::g_gxState.pipelineStateGeneration = gx::next_gx_state_epoch();
+    gx::g_gxState.stateDirty = true;
+  }
+  // Per list, not per shader config: a cached list resolved either way keeps its own key, so no re-resolution.
+  gx::g_gxState.nativeVertexInputRequested = g_gxNativeVertexInput.load(std::memory_order_relaxed);
+  gx::geometry_cache::begin_frame(g_frameIndex);
+  detail::log_resident_geometry(g_frameIndex);
   if (clearEfb) {
     gx::begin_frame_interpolation();
   }
@@ -1294,6 +1315,9 @@ bool resume_frame() { return begin_frame_impl(false); }
 void abort_frame() noexcept {
   efb_ram::cancel();
   efb_ram::abort_async();
+  // Records queued for the geometry buffer never reach it: forget their entries too.
+  detail::drop_geometry_uploads();
+  gx::geometry_cache::uploads_dropped();
   g_verts.release();
   g_uniforms.release();
   g_uniformUploadDestination = nullptr;
@@ -2073,9 +2097,20 @@ static bool end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame,
   s_mappingState.store(BufferMapState::Unmapped, std::memory_order_release);
   g_stats.drawCallCount = g_drawCallCount;
   g_stats.mergedDrawCallCount = g_mergedDrawCallCount;
+  // The geometry cache's new records ride in the vertex staging (its region starts the staging buffer) and are copied
+  // on to the persistent buffer here, before the frame's passes that read them.
+  detail::encode_geometry_uploads(cmd, g_stagingBuffers[currentStagingBuffer]);
+  gx::geometry_cache::uploads_encoded();
   g_stats.lastVertSize = writeBuffer(g_verts, g_vertexBuffer, VertexBufferSize, "Vertex");
   g_stats.lastUniformSize = writeBuffer(g_uniforms, g_uniformBuffer, UniformBufferSize, "Uniform");
   g_stats.lastIndexSize = writeBuffer(g_indices, g_indexBuffer, IndexBufferSize, "Index");
+  // Only this thread raises them; the periodic log line takes them with an exchange.
+  if (g_stats.lastVertSize > g_stagingStats.peakVertexBytes.load(std::memory_order_relaxed)) {
+    g_stagingStats.peakVertexBytes.store(static_cast<uint32_t>(g_stats.lastVertSize), std::memory_order_relaxed);
+  }
+  if (g_stats.lastIndexSize > g_stagingStats.peakIndexBytes.load(std::memory_order_relaxed)) {
+    g_stagingStats.peakIndexBytes.store(static_cast<uint32_t>(g_stats.lastIndexSize), std::memory_order_relaxed);
+  }
   g_stats.lastStorageSize = writeBuffer(g_storage, g_storageBuffer, StorageBufferSize, "Storage");
   if constexpr (UseTextureBuffer) {
     g_stats.lastTextureUploadSize = g_textureUpload.size();
@@ -3474,6 +3509,31 @@ Range push_verts(const uint8_t* data, size_t length) { return push(g_verts, data
 Range push_indices(const uint8_t* data, size_t length) { return push(g_indices, data, length, 0); }
 Range push_uniform(const uint8_t* data, size_t length) {
   return push(g_uniforms, data, length, g_cachedLimits.minUniformBufferOffsetAlignment);
+}
+void set_gx_deindex_vertices(bool value) noexcept { g_gxDeindexVertices.store(value, std::memory_order_relaxed); }
+bool get_gx_deindex_vertices() noexcept { return g_gxDeindexVertices.load(std::memory_order_relaxed); }
+void set_gx_native_vertex_input(bool value) noexcept { g_gxNativeVertexInput.store(value, std::memory_order_relaxed); }
+bool get_gx_native_vertex_input() noexcept { return g_gxNativeVertexInput.load(std::memory_order_relaxed); }
+Range push_indices32(const uint32_t* data, size_t count) {
+  // The 16-bit templates before it may leave the staging on a half word; a 32-bit index must start on a whole one.
+  if (const size_t misaligned = g_indices.size() % sizeof(uint32_t); misaligned != 0) {
+    g_indices.append_zeroes(sizeof(uint32_t) - misaligned);
+  }
+  return push(g_indices, reinterpret_cast<const uint8_t*>(data), count * sizeof(uint32_t), 4);
+}
+size_t vertex_staging_room() noexcept {
+  return g_verts.capacity() > g_verts.size() ? g_verts.capacity() - g_verts.size() : 0;
+}
+size_t index_staging_room() noexcept {
+  return g_indices.capacity() > g_indices.size() ? g_indices.capacity() - g_indices.size() : 0;
+}
+void staging_overflow_abort(size_t requested, size_t capacity) noexcept {
+  // The region that overflowed is the one whose use matches its size.
+  Log.fatal("Frame staging overflow: {} bytes needed in a mapped region of {} (vertex staging {} of {} KiB in use, "
+            "index {} of {} KiB, uniform {} of {} KiB, storage {} of {} KiB)",
+            requested, capacity, g_verts.size() >> 10, VertexBufferSize >> 10, g_indices.size() >> 10,
+            IndexBufferSize >> 10, g_uniforms.size() >> 10, UniformBufferSize >> 10, g_storage.size() >> 10,
+            StorageBufferSize >> 10);
 }
 Range push_storage(const uint8_t* data, size_t length) {
   return push(g_storage, data, length, g_cachedLimits.minStorageBufferOffsetAlignment);

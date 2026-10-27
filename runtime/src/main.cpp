@@ -1361,6 +1361,90 @@ static void TerminateHandler() {
 }
 
 // Runtime entry point: loads the configuration, brings up aurora and runs the game.
+// Resident geometry (KartFrame lane AC; aurora's geometry cache, ported from the iChris4/Wiicompiled_VR fork): off by
+// default. KARTFRAME_RESIDENT_GEOMETRY (wins) or Config.toml [video] resident_geometry selects the stages:
+// 0|off, deindex (indexed attributes resolved into flat records as the FIFO is decoded), cache (that plus display
+// lists kept resolved on the GPU), 1|on|native (that plus native vertex input for the cached lists).
+// KARTFRAME_GEOMETRY_CACHE_MB or [video] geometry_cache_mb sizes the buffer (default 32). Read here, not in
+// runtime_config.h, which every translated file includes. One startup log line names the mode.
+static void ConfigureResidentGeometry() {
+    std::string mode;
+    std::string source = "default";
+    std::optional<uint32_t> cacheMb;
+    try {
+        std::ifstream file(RuntimeConfigFile::ResolveConfigPath(), std::ios::binary);
+        if (file) {
+            const auto document = toml::parse(file, "Config.toml");
+            if (auto text = RuntimeConfigFile::FindConfigValue<std::string>(document, "video", "resident_geometry")) {
+                mode = *text;
+                source = "[video] resident_geometry";
+            } else if (auto flag = RuntimeConfigFile::FindConfigValue<bool>(document, "video", "resident_geometry")) {
+                mode = *flag ? "on" : "off";
+                source = "[video] resident_geometry";
+            }
+            cacheMb = RuntimeConfigFile::FindConfigUint(document, "video", "geometry_cache_mb");
+        }
+    } catch (const std::exception&) {
+    }
+    if (const char* env = std::getenv("KARTFRAME_RESIDENT_GEOMETRY"); env != nullptr && *env != '\0') {
+        mode = env;
+        source = std::string("KARTFRAME_RESIDENT_GEOMETRY=") + env;
+    }
+    if (const char* env = std::getenv("KARTFRAME_GEOMETRY_CACHE_MB"); env != nullptr && *env != '\0') {
+        cacheMb = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+    }
+    for (auto& c : mode) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    bool deindex = false;
+    bool cache = false;
+    bool native = false;
+    if (mode == "1" || mode == "on" || mode == "true" || mode == "native") {
+        deindex = cache = native = true;
+        mode = "native";
+    } else if (mode == "cache") {
+        deindex = cache = true;
+    } else if (mode == "deindex") {
+        deindex = true;
+    } else {
+        if (!mode.empty() && mode != "0" && mode != "off" && mode != "false") {
+            RT_LOG(RT_TAG_RUNTIME) << "resident geometry: unknown mode \"" << mode << "\", using off" << std::endl;
+        }
+        mode = "off";
+    }
+    const uint32_t mb = cache ? std::min<uint32_t>(cacheMb.value_or(32u), 1024u) : 0u;
+    if (cache && mb == 0) {
+        cache = native = false;
+        mode = deindex ? "deindex" : "off";
+    }
+    aurora_set_gx_deindex_vertices(deindex);
+    aurora_set_gx_geometry_cache_mb(mb);
+    aurora_set_gx_native_vertex_input(native);
+    RT_LOG(RT_TAG_RUNTIME) << "resident geometry: mode=" << mode << " deindex=" << (deindex ? 1 : 0)
+                           << " cache_mb=" << mb << " native_vertex_input=" << (native ? 1 : 0) << " (" << source
+                           << ")" << std::endl;
+    // Test only (lane AC's image check): KARTFRAME_RESIDENT_GEOMETRY_TOGGLE=<start s>/<period s> switches the
+    // configured mode off and on again every period from start on (off first), live, so one paused scene can be
+    // dumped both ways. Each switch is logged.
+    const char* toggle = std::getenv("KARTFRAME_RESIDENT_GEOMETRY_TOGGLE");
+    if (toggle != nullptr && *toggle != '\0' && deindex) {
+        double start = 0.0;
+        double period = 0.0;
+        if (std::sscanf(toggle, "%lf/%lf", &start, &period) == 2 && period > 0.0) {
+            std::thread([start, period, native] {
+                const auto t0 = std::chrono::steady_clock::now();
+                std::this_thread::sleep_for(std::chrono::duration<double>(start));
+                for (bool on = false;; on = !on) {
+                    aurora_set_gx_deindex_vertices(on);
+                    aurora_set_gx_native_vertex_input(on && native);
+                    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                    RT_LOG(RT_TAG_RUNTIME) << "resident geometry toggle: " << (on ? "on" : "off") << " at t="
+                                           << t << " s" << std::endl;
+                    std::this_thread::sleep_for(std::chrono::duration<double>(period));
+                }
+            }).detach();
+        }
+    }
+}
+
 int RuntimeMain(int argc, char** argv) {
     // Must run before the transcript duplicates stdout/stderr: it decides what
     // those descriptors are mirrored to now that the products are GUI-subsystem.
@@ -1522,6 +1606,7 @@ int RuntimeMain(int argc, char** argv) {
         }
         aurora_set_frame_worker_wait_callback(ServiceGuestTimingDuringAuroraFrameWait);
         GxGuestWrite::InstallAuroraHooks();
+        ConfigureResidentGeometry();
         GxThread::Configure(RuntimeConfigFile::GxThread());
         GxThread::SetWaitCallback(ServiceGuestTimingDuringAuroraFrameWait);
         GxThread::Start();
