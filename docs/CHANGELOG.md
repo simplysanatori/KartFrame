@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Compacted-layout shaders bake the position-matrix index as the constant 0 instead of a uniform load with a dynamic index (ported from iChris4/Wiicompiled_VR 236665c, GPL-3.0).
+
 ## 0.9.0-alpha.1 (October 2026), pre-release
 
 The first public build of the native port. Everything below has been played on a Steam Frame unless marked
