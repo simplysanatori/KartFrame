@@ -12,8 +12,8 @@
 #   KARTFRAME_REFRESH_HZ    refresh rate, 90 or 120: set as SteamVR's per-app rate and passed to the game (default:
 #                           [vr] refresh_rate of UserData/Config.toml, else 120). 90 Hz shows the game's 60 frames a
 #                           second 1.5 refreshes each (interpolated): it felt wrong to the owner; 120 is the default
-#   KARTFRAME_EYE_PX        per-eye size asked of SteamVR (resolutionOverride), 1024 to 4096 (default 1728, which
-#                           is also SteamVR's own 100 % on the Frame; the panels are 2160). [vr] render_scale scales it
+#   KARTFRAME_EYE_PX        per-eye size asked of SteamVR (resolutionOverride), 1024 to 4096 (default 1728, SteamVR's
+#                           Auto here; its 100 % is the panels' 2160). [vr] render_scale scales it
 #   KARTFRAME_RENDER_SCALE  one launch's [vr] render_scale (eyes = SteamVR's size x this; 1.25 = 2160 at 1728)
 #   KARTFRAME_FDM_LAYER=0   sets DISABLE_VULKAN_FDM_INJECTION_LAYER=1 (A/B: Valve's FDM layer off)
 #   KARTFRAME_SYSMEM=0      leaves Turnip in tiled mode; default 1 sets TU_DEBUG=sysmem (measured: the
@@ -118,7 +118,7 @@ if ! [[ "$EYE_PX" =~ ^[0-9]+$ ]] || [ "$EYE_PX" -lt 1024 ] || [ "$EYE_PX" -gt 40
     log "KARTFRAME_EYE_PX=$EYE_PX is not a size from 1024 to 4096, using 1728"; EYE_PX=1728
 fi
 [ -n "$KARTFRAME_RENDER_SCALE" ] && export KARTFRAME_RENDER_SCALE
-log "eye size asked of SteamVR: $EYE_PX (1728 is SteamVR's 100 % here), render_scale ${KARTFRAME_RENDER_SCALE:-from Config.toml}"
+log "eye size asked of SteamVR: $EYE_PX (SteamVR: Auto 1728, 100 % 2160), render_scale ${KARTFRAME_RENDER_SCALE:-from Config.toml}"
 VRCMD=${KARTFRAME_VRCMD:-$(command -v vrcmd || echo /opt/steamvr/bin/linuxarm64/vrcmd)}
 VRSETTINGS=${KARTFRAME_VRSETTINGS:-$HOME/.config/openvr/config/steamvr.vrsettings}
 STEAMVR_DIR=${KARTFRAME_STEAMVR_DIR:-/opt/steamvr/bin/linuxarm64}

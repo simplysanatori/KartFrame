@@ -101,7 +101,7 @@ They only apply to a launch from the Steam library, where `SteamAppId` is set. 9
 
 ### Resolution
 
-1728 pixels per eye is SteamVR's 100 percent on the Frame, and it is the floor for the shipped default (`render_scale = 1.0`). I measure lower values for the record but do not ship them.
+1728 pixels per eye is what SteamVR's Auto resolution picks on the Frame (64 percent of the pixels of its 100 percent, which is the panel's 2160), and it is the floor for the shipped default (`render_scale = 1.0`). I measure lower values for the record but do not ship them.
 
 ### Controls
 

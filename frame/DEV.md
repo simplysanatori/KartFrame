@@ -56,8 +56,8 @@ Config `[vr] frame_pacing = auto|inline|pipelined` (auto = pipelined, measured) 
 (120; requested in-app only when SteamVR offers exactly that rate, else the wrapper's per-app key
 decides; lane AG: the wrapper reads it from Config.toml, sets it as the per-app rate and exports it as
 KARTFRAME_REFRESH_HZ, so SteamVR and the game agree; 90 or 120). Eye size (lane AG): SteamVR's recommended
-view size is the wrapper's KARTFRAME_EYE_PX (resolutionOverride, default 1728 = SteamVR's own 100 % here, the
-driver's panel size is 2160), times `[vr] render_scale` (KARTFRAME_RENDER_SCALE for one launch); the
+view size is the wrapper's KARTFRAME_EYE_PX (resolutionOverride, default 1728 = SteamVR's Auto on this GPU, 64 % of the pixels
+of its 100 %, which is the driver's 2160 = the panel), times `[vr] render_scale` (KARTFRAME_RENDER_SCALE for one launch); the
 runtime logs `view size: recommended ... -> eyes ...` at start. Mock: MOCK_XR_EYE, MOCK_XR_HZ (the OpenVR
 stub's fake grid follows MOCK_XR_HZ too); frame/perf/LANE_AG.md has the matrix. Menus are a quad layer fixed in the room (menu_shader_quality 0), the first-run guide is
 projected. Env: KARTFRAME_PACING overrides the mode; KARTFRAME_REFRESH_HZ the rate;
