@@ -19,6 +19,13 @@
 #include <SDL3/SDL_gamepad.h>
 #include <dolphin/pad.h>
 
+// The GameCube motor of port 0 on the VR controllers in the gamepad mode (defined in
+// vr/openxr_input.cpp, declared in vr/openxr_input.h, which this file does not include).
+namespace mkw::vr {
+float OpenXRGamepadRumbleBase() noexcept;
+void OpenXRSetGamepadRumble(bool on) noexcept;
+} // namespace mkw::vr
+
 namespace {
 
 std::atomic<bool> g_rumbleEnabled{true};
@@ -137,6 +144,11 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
         static mkw::vr::QuestPadFilter filter;
         const auto& config=RuntimeConfigFile::Get();
         statuses[0]=filter.Apply(mkw::vr::MapQuestInput(vrControls,config.vrStickCalibration,config.vrButtonMapping),InputBindings::InputBlocked());
+        // Port 0 is the VR controllers now: advertise its motor, which PAD__ControlMotor_HLE hands
+        // to their haptics (the virtual SDL gamepad has none of its own).
+        if (mkw::vr::OpenXRGamepadRumbleBase() > 0.0f) {
+            rumbleMask |= PAD_CHAN0_BIT;
+        }
     }
 
     // A USB wheel is player 1's GameCube controller: it owns port 0 in a race
@@ -181,6 +193,11 @@ extern "C" void PAD__ControlMotor_HLE(int32_t chan, uint32_t command)
         command = PAD_MOTOR_STOP;
     }
     if (!physical_wheel::Motor(chan, command)) {
+        // In the gamepad mode port 0 is the VR controllers (PAD__Read_HLE): their haptics follow the
+        // motor. A USB wheel that owns the port keeps it (Motor above).
+        if (chan == 0 && mkw::vr::OpenXRGetControllerMode() == mkw::vr::OpenXRControllerMode::Gamepad) {
+            mkw::vr::OpenXRSetGamepadRumble(command == PAD_MOTOR_RUMBLE);
+        }
         PADControlMotor(chan, command);
     }
 }
