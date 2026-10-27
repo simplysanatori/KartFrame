@@ -110,8 +110,8 @@ Eye dumps at 100, 200 and 290 s show the race and the result screen with no torn
 
 ## Untested
 
-- The headset: whether the small GPU saving shows there (SteamVR's compositor beside us, TU_DEBUG=sysmem, which the
-  wrapper sets and the mock runs above did not), and whether it touches the right-eye double image.
+- The headset: whether the small GPU saving shows there (SteamVR's compositor beside us; the mock runs above already
+  used TU_DEBUG=sysmem through hudrace.sh, as the wrapper does), and whether it touches the right-eye double image.
 - A course change in one session (race exit with a full cache, the next course at reused addresses): the attract
   race's exit was exercised, a second Grand Prix race was not. Other courses' lists (Retro tracks are not in this
   game) and multiplayer.
