@@ -1788,6 +1788,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   config.shaderConfig.fogRangeAdjust =
       config.shaderConfig.fogType != GX_FOG_NONE && (g_gxState.fogRange[0] & (1u << 10)) != 0;
   populate_vertex_layout(config.shaderConfig, fmt);
+  config.shaderConfig.nativeVertices = g_gxState.nativeVertices ? 1 : 0;
   if (primitive == GX_LINES) {
     config.shaderConfig.lineMode = 1;
   } else if (primitive == GX_LINESTRIP) {

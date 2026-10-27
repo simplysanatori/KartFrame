@@ -584,7 +584,11 @@ struct ShaderConfig {
   // Alternate replay-only shader variant that exports the original flat-screen
   // depth for draws reprojected onto the VR virtual screen.
   u8 exactScreenDepth : 1 = 0;
-  u8 pad1 : 3 = 0;
+  // The attributes arrive through the GPU's vertex-input stage from the geometry cache's aligned records
+  // (gx/native_vertex.hpp) instead of being decoded from the storage buffer. Same layout, so offsets and merging do not
+  // change; zero in every recipe recorded before the bit existed, so those keep their bytes and their shaders.
+  u8 nativeVertices : 1 = 0;
+  u8 pad1 : 2 = 0;
   u8 numTexGens = 0;
   u32 zTexture = 0; // bias[0:23], format[24:25], op[26:27]; 0 disables shader depth output.
   std::array<AttrConfig, MaxVtxAttr> attrs;
