@@ -141,6 +141,9 @@ Hold left View for half a second. The VR settings panel opens. Everything on it 
 | `[vr] refresh_rate` | 120 | 120 or 90. The launch wrapper sets it as SteamVR's rate for this game at every launch, and the game follows. At 90 Hz each of the game's 60 frames a second spans 1.5 refreshes instead of 2 (interpolated); that felt less smooth to me, so 120 is the default |
 | `[vr] menu_shader_quality` | 0 | 0 is a plain dark background behind the menus |
 | `[vr] hand_steering` | true | Grips hold the wheel in the first-person cockpit |
+| `[vr] cockpit_item_hand` | `"right"` | The hand that holds your item in the first-person cockpit (`"left"`, `"right"` or `"off"`), and the hand whose swing throws it |
+| `[vr] cockpit_item_size` | 0.2 | The held item's size in metres |
+| `[vr] cockpit_item_throw` | true | A quick swing of the item hand forward or back throws the item that way |
 | `[vr] hud_virtual_screen` | true | Menus and the race HUD on a virtual screen |
 | `[vr] hud_distance_meters` | 2.0 | How far away that screen is |
 | `[vr] hud_width_meters` | 2.4 | How wide it is |
@@ -161,6 +164,8 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | `KARTFRAME_END_PHASE` | `after` (default), `before`, or `off`: when in the refresh each frame is handed to SteamVR, against the compositor grid the wrapper's helper publishes. `off` hands over at the wake-up, which doubles the image |
 | `KARTFRAME_STEREO_PACKED` | `1` (default) puts both eyes of a set in one 3456x1728 swapchain image, released once. `0` or `off` goes back to one swapchain per eye, to compare; that is the layout with the right-eye double image |
 | `KARTFRAME_END_DELAY_US` | A fixed delay after the wake-up instead of the grid, in microseconds; also the fallback when the grid is missing (4000) |
+| `KARTFRAME_MENU_CONTROLLERS` | `eyes` draws the controllers and the ray in front of the menu screen (needs the packed default); `projected` draws the screen into the room layer instead (softer text); off by default |
+| `KARTFRAME_RUMBLE` | `0` turns off the game's rumble on the controllers; a strength such as `0.4` or `1.0` sets it (default 0.7; `1` alone means on at the default) |
 | `KARTFRAME_VRTIMING_FRAMES` | 1 logs every compositor frame to `vrframes.log` in the session folder |
 | `KARTFRAME_HOME` | The data folder, if it is not `~/.local/share/KartFrame` |
 
