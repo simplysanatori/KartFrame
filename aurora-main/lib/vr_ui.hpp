@@ -32,13 +32,22 @@ int activeQuality=-1;
 V point(const float* m,V p) { return {m[0]*p[0]+m[1]*p[1]+m[2]*p[2]+m[3],m[4]*p[0]+m[5]*p[1]+m[6]*p[2]+m[7],m[8]*p[0]+m[9]*p[1]+m[10]*p[2]+m[11]}; }
 // The menus' environment layer (the Frame): one eye's room around the screen drawn into its part of a
 // packed two-eye target. The screen itself is a separate quad layer, so its area stays transparent.
-struct Environment { wgpu::TextureView view; uint32_t x=0,width=0,height=0; bool clear=false; };
+// Lane AF (KARTFRAME_MENU_CONTROLLERS=projected): `screen` set, the screen's area shows that image's `screenUv`
+// rectangle (u0, v0, u1, v1) instead, and controller triangles behind the screen are left out.
+struct Environment { wgpu::TextureView view; uint32_t x=0,width=0,height=0; bool clear=false;
+                     wgpu::BindGroup screen; std::array<float,4> screenUv{}; };
+// Lane AF (KARTFRAME_MENU_CONTROLLERS=eyes): one eye's controllers and rays drawn into its own copy of the screen's
+// image, in the viewport (x, y, width, height) its picture fills there: each point is projected from the eye onto
+// the screen's plane, and only what lies between the eye and the screen is drawn (the far plane is the screen).
+// Shown on that eye's screen quad, every pixel is where that eye sees the point, so it is stereo-correct.
+struct ScreenComposite { wgpu::TextureView view; float x=0,y=0,width=0,height=0; };
 void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,const AuroraStereoFrame& frame,
-            const AuroraVRUiGuide& layout,uint32_t eye,const Environment* env=nullptr) {
-  const auto& output=g_stereoEyeTargets[env?1:eye].output();
-  const wgpu::TextureView targetView=env?env->view:output.view;
+            const AuroraVRUiGuide& layout,uint32_t eye,const Environment* env=nullptr,const ScreenComposite* comp=nullptr) {
+  const auto& output=g_stereoEyeTargets[env?1:(comp?0:eye)].output();
+  const wgpu::TextureView targetView=env?env->view:comp?comp->view:output.view;
   const auto setViewport=[&](const wgpu::RenderPassEncoder& pass) {
     if(env) pass.SetViewport(float(env->x),0,float(env->width),float(env->height),0,1);
+    if(comp) pass.SetViewport(comp->x,comp->y,comp->width,comp->height,0,1);
   };
   panelAspect.store(float(source.size.width)/std::max(1u,source.size.height),std::memory_order_relaxed);
   // Apply changes between stereo pairs, so both eyes use the same quality.
@@ -114,7 +123,7 @@ void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,co
   };
   static const auto start=std::chrono::steady_clock::now();
   static float time=0;
-  if(eye==0) time=std::chrono::duration<float>(std::chrono::steady_clock::now()-start).count()*0.25f;
+  if(eye==0 && !comp) time=std::chrono::duration<float>(std::chrono::steady_clock::now()-start).count()*0.25f;
   Vertex sky[3]{};
   const float corners[3][2]{{-1,-1},{3,-1},{-1,3}};
   for(int i=0;i<3;++i) {
@@ -126,7 +135,8 @@ void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,co
        -(m[1]*m[3]+m[5]*m[7]+m[9]*m[11])/6,
        -(m[2]*m[3]+m[6]*m[7]+m[10]*m[11])/6}};
   }
-  if(quality && !env) {
+  if(comp) {
+  } else if(quality && !env) {
     drawVertices(panoramaView,source.bindGroup,sky,3,wgpu::LoadOp::Clear);
     for(auto& v:sky) v.textured=-1;
     drawVertices(targetView,panoramaBinding,sky,3,wgpu::LoadOp::Clear);
@@ -140,8 +150,23 @@ void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,co
   {std::lock_guard lock(mutex);workshop=workshopActive;captured=workshopCaptured;}
   struct MaterialRange { uint32_t first,count; wgpu::BindGroup binding; };
   std::vector<MaterialRange> materialRanges;
+  const float* fromPanel=frame.ui.eyeFromPanel[eye];
+  // Eyes mode: the eye in panel space, and its distance to the screen's plane (z = -distance) along the normal.
+  const V eyeInPanel{-(fromPanel[0]*fromPanel[3]+fromPanel[4]*fromPanel[7]+fromPanel[8]*fromPanel[11]),
+                     -(fromPanel[1]*fromPanel[3]+fromPanel[5]*fromPanel[7]+fromPanel[9]*fromPanel[11]),
+                     -(fromPanel[2]*fromPanel[3]+fromPanel[6]*fromPanel[7]+fromPanel[10]*fromPanel[11])};
+  const float toScreen=eyeInPanel[2]+frame.ui.distance,compNear=.01f;
+  if(comp && !(toScreen>2*compNear)) return;
   const auto vertex=[&](V p,float u,float v,V c,float t) {
-    const auto q=point(frame.ui.eyeFromPanel[eye],p);const auto* proj=frame.eyes[eye].projection;
+    if(comp) {
+      // Off-axis projection onto the screen: x, y in the screen's half extents, w the depth along the screen's
+      // normal, z from the near plane (0) to the screen's plane (1).
+      const float dz=eyeInPanel[2]-p[2];
+      const float hw=std::max(.25f,frame.ui.width)*.5f,hh=hw*float(source.size.height)/std::max(1u,source.size.width);
+      return Vertex{{(eyeInPanel[0]*dz+(p[0]-eyeInPanel[0])*toScreen)/hw,(eyeInPanel[1]*dz+(p[1]-eyeInPanel[1])*toScreen)/hh,
+                     (dz-compNear)*toScreen/(toScreen-compNear),dz},{u,v},{c[0],c[1],c[2]},t};
+    }
+    const auto q=point(fromPanel,p);const auto* proj=frame.eyes[eye].projection;
     return Vertex{{proj[0]*q[0]+proj[2]*q[2],proj[5]*q[1]+proj[6]*q[2],-q[2]-.01f,-q[2]},{u,v},{c[0],c[1],c[2]},t};
   };
   const auto quad=[&](V center,float w,float h,float u0,float v0,float u1,float v1) {
@@ -153,7 +178,12 @@ void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,co
   };
   const float width=std::max(.25f,frame.ui.width),height=width*float(source.size.height)/std::max(1u,source.size.width);
   const auto panelSlice=[&](float top,float bottom) { quad({0,(.5f-(top+bottom)/2)*height,-frame.ui.distance},width,(bottom-top)*height,0,top,1,bottom); };
-  if(env) {
+  if(comp) {
+  } else if(env && env->screen) {
+    // Projected: the screen's picture in the environment (no quad layer).
+    const auto& uv=env->screenUv;
+    quad({0,0,-frame.ui.distance},width,height,uv[0],uv[1],uv[2],uv[3]);
+  } else if(env) {
     // The screen's own quad layer shows the picture: leave its area transparent black.
     quad({0,0,-frame.ui.distance},width,height,0,0,1,1);
     for(size_t i=vertices.size()-6;i<vertices.size();++i) vertices[i].textured=3;
@@ -174,8 +204,8 @@ void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,co
     const auto c=vertex({end[0]-.001f,end[1],end[2]},0,0,color,0);
     const auto d=vertex({end[0]+.001f,end[1],end[2]},0,0,color,0);
     vertices.insert(vertices.end(),{a,b,c,b,d,c});
-    // A small target marker remains readable against bright game menus.
-    for(int segment=0;segment<16;++segment) {
+    // A small target marker remains readable against bright game menus (the screen's own mark in eyes mode).
+    if(!comp) for(int segment=0;segment<16;++segment) {
       const float angle=segment*6.2831853f/16,next=(segment+1)*6.2831853f/16;
       vertices.push_back(vertex(end,0,0,{1,1,1},0));
       vertices.push_back(vertex({end[0]+.006f*std::cos(angle),end[1]+.006f*std::sin(angle),end[2]},0,0,color,0));
@@ -217,10 +247,14 @@ void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,co
         for(size_t i=0;i+2<model.size();i+=3) {
           Triangle tri{};
           tri.material=model[i].material;
+          float panelZ=0;
           for(int j=0;j<3;++j) {
             const auto& v=model[i+j];const auto p=point(frame.ui.panelFromGrip[hand],{v.position[0],v.position[1],v.position[2]});
             tri.v[j]=vertex(p,v.uv[0],v.uv[1],{v.color[0],v.color[1],v.color[2]},tri.material?2:0);tri.depth+=tri.v[j].clip[3];
+            panelZ+=p[2];
           }
+          // Projected: no depth buffer, so a controller pushed through the screen must not show in front of it.
+          if(env && env->screen && panelZ<-3*frame.ui.distance) continue;
           triangles.push_back(tri);
         }
       }
@@ -235,7 +269,7 @@ void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,co
       order[i]={static_cast<int32_t>(std::floor(triangles[i].depth*(1.f/3.f)/.005f)),triangles[i].material,i};
     std::sort(order.begin(),order.end(),[](const Key& a,const Key& b){
       return a.slice!=b.slice?a.slice>b.slice:a.material<b.material;});
-    materialRanges.push_back({0,static_cast<uint32_t>(vertices.size()),source.bindGroup});
+    materialRanges.push_back({0,static_cast<uint32_t>(vertices.size()),env && env->screen?env->screen:source.bindGroup});
     vertices.reserve(vertices.size()+triangles.size()*3+512);
     {
       std::lock_guard lock(mutex);
@@ -291,16 +325,19 @@ void render(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,co
 // The pointer's target marks drawn into the menus' screen image itself (eye target 0, the screen quad's
 // picture): a mark on the quad's own surface is visible and stereo-correct whatever order the runtime
 // composites the layers in (SteamVR on the Frame hid the environment layer's mark under the quad, H4.md).
-// Call after render() built the pipeline for this format; `source` is the picture placed in the image.
-void screen_marks(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,const AuroraStereoFrame& frame) {
+// Call after render() built the pipeline for this format; `source` is the picture placed in the image. Lane AF:
+// into the screen image's columns [x0, x0 + imageWidth) (one eye's half of the packed pair in eyes mode; 0 = all).
+void screen_marks(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& source,const AuroraStereoFrame& frame,
+                  uint32_t x0=0,uint32_t imageWidth=0) {
   const auto& output=g_stereoEyeTargets[0].output();
   if(!pipeline || format!=output.format || !source.bindGroup || !source.size.width || !source.size.height) return;
-  const auto vp=webgpu::calculate_present_viewport(output.size.width,output.size.height,source.size.width,source.size.height);
+  if(!imageWidth || x0+imageWidth>output.size.width) { x0=0;imageWidth=output.size.width; }
+  const auto vp=webgpu::calculate_present_viewport(imageWidth,output.size.height,source.size.width,source.size.height);
   const float width=std::max(.25f,frame.ui.width),height=width*float(source.size.height)/float(source.size.width);
   std::vector<Vertex> vertices;
   const auto at=[&](float x,float y,V color) {
     const float px=vp.left+(x/width+.5f)*vp.width,py=vp.top+(.5f-y/height)*vp.height;
-    return Vertex{{px/float(output.size.width)*2-1,1-py/float(output.size.height)*2,0,1},{0,0},{color[0],color[1],color[2]},0};
+    return Vertex{{px/float(imageWidth)*2-1,1-py/float(output.size.height)*2,0,1},{0,0},{color[0],color[1],color[2]},0};
   };
   for(int hand=0;hand<2;++hand) if(frame.ui.pointerTracked[hand]) {
     const auto* ray=frame.ui.pointerRay[hand];
@@ -329,6 +366,7 @@ void screen_marks(wgpu::CommandEncoder& encoder,const webgpu::PresentSource& sou
   const wgpu::RenderPassColorAttachment ca{.view=output.view,.loadOp=wgpu::LoadOp::Load,.storeOp=wgpu::StoreOp::Store};
   const wgpu::RenderPassDescriptor rd{.label="VR menu pointer marks",.colorAttachmentCount=1,.colorAttachments=&ca};
   auto pass=encoder.BeginRenderPass(&rd);pass.SetPipeline(pipeline);pass.SetBindGroup(0,source.bindGroup);
+  pass.SetViewport(float(x0),0,float(imageWidth),float(output.size.height),0,1);
   pass.SetVertexBuffer(0,buffer);pass.Draw(static_cast<uint32_t>(vertices.size()));pass.End();
 }
 }

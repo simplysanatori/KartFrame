@@ -51,6 +51,19 @@ const char* MenuEnvironmentSetting() {
     const char* env = std::getenv("KARTFRAME_MENU_ENV");
     return env != nullptr ? env : "";
 }
+// Lane AF, KARTFRAME_MENU_CONTROLLERS (read by Aurora as well, aurora.cpp menu_controllers_setting): the controllers
+// and the ray where they are in front of the menu screen. off (default): hidden by the screen's quad (the
+// environment layer is under it). eyes: one screen quad per eye (XR_EYE_VISIBILITY_LEFT/RIGHT) from the halves of
+// the packed pair's image (KARTFRAME_STEREO_PACKED=1, else off), each half holding the screen with that eye's view
+// of the controllers drawn in. projected: no screen quad; the screen is drawn into the environment projection layer.
+enum class MenuControllers { Off, Eyes, Projected };
+MenuControllers MenuControllersSetting() {
+    static const MenuControllers mode = [] {
+        const std::string_view env = std::getenv("KARTFRAME_MENU_CONTROLLERS") ? std::getenv("KARTFRAME_MENU_CONTROLLERS") : "";
+        return env == "eyes" ? MenuControllers::Eyes : env == "projected" ? MenuControllers::Projected : MenuControllers::Off;
+    }();
+    return mode;
+}
 } // namespace
 namespace {
 
@@ -1791,6 +1804,21 @@ public:
             // projection layer. Under the quad by default (the screen's area of it is transparent; the
             // pointer's mark is in the screen's own image). KARTFRAME_MENU_ENV=over puts it over the quad,
             // blended by its alpha, which SteamVR on the Frame did not honour (H4.md).
+            // Lane AF, KARTFRAME_MENU_CONTROLLERS=eyes: Aurora wrote the screen into both halves of the packed pair
+            // (aurora.cpp menu_screen_eyes: the environment target twice the eye's width, the same height), each
+            // with that eye's view of the controllers. One quad per eye, each showing its own half.
+            const bool packed_pair = retained_swapchains_[1].handle == XR_NULL_HANDLE;
+            const bool screen_eyes = MenuControllersSetting() == MenuControllers::Eyes && packed_pair &&
+                                     frame.presentation.menu_environment && retained_env_valid_ &&
+                                     frame.render_width[1] == 2 * frame.render_width[0] &&
+                                     frame.render_height[1] == frame.render_height[0] &&
+                                     retained_swapchains_[0].width == 2 * image_width;
+            XrCompositionLayerQuad right_quad = quad;
+            if (screen_eyes) {
+                quad.eyeVisibility = XR_EYE_VISIBILITY_LEFT;
+                right_quad.eyeVisibility = XR_EYE_VISIBILITY_RIGHT;
+                right_quad.subImage.imageRect.offset.x += static_cast<int32_t>(image_width);
+            }
             const bool position_valid = (frame.xr_frame.view_state_flags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
             if (retained_env_valid_ && frame.presentation.menu_environment && frame.xr_frame.views_valid &&
                 position_valid && retained_env_swapchain_.handle != XR_NULL_HANDLE) {
@@ -1809,13 +1837,28 @@ public:
                 environment.space = runtime_->AppSpace();
                 environment.viewCount = kOpenXREyeCount;
                 environment.views = views.data();
+                // Lane AF, KARTFRAME_MENU_CONTROLLERS=projected: the environment holds the screen (Aurora drew it
+                // there), so it is the only scene layer.
+                if (MenuControllersSetting() == MenuControllers::Projected) {
+                    environment.layerFlags = 0;
+                    return EndFrameWithPanel(frame, reinterpret_cast<const XrCompositionLayerBaseHeader*>(&environment));
+                }
                 const bool over = MenuEnvironmentOver();
                 environment.layerFlags = over ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT : 0;
+                const auto* env_layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&environment);
+                const auto* quad_layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad);
+                const auto* right_layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&right_quad);
+                const XrCompositionLayerBaseHeader* scene[3] = {over ? quad_layer : env_layer, over ? env_layer : quad_layer,
+                                                                nullptr};
+                if (screen_eyes) {
+                    scene[0] = env_layer, scene[1] = quad_layer, scene[2] = right_layer;
+                }
+                return EndFrameWithPanel(frame, scene, screen_eyes ? 3u : 2u);
+            }
+            if (screen_eyes) {
                 const XrCompositionLayerBaseHeader* scene[2] = {
-                    reinterpret_cast<const XrCompositionLayerBaseHeader*>(over ? static_cast<const void*>(&quad)
-                                                                               : static_cast<const void*>(&environment)),
-                    reinterpret_cast<const XrCompositionLayerBaseHeader*>(over ? static_cast<const void*>(&environment)
-                                                                               : static_cast<const void*>(&quad))};
+                    reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad),
+                    reinterpret_cast<const XrCompositionLayerBaseHeader*>(&right_quad)};
                 return EndFrameWithPanel(frame, scene, 2);
             }
             return EndFrameWithPanel(frame, reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad));
@@ -1855,8 +1898,9 @@ public:
         const auto& panel = frame.presentation.panel;
         XrCompositionLayerQuad panel_quad{};
         XrCompositionLayerQuad race_quad{};
-        const XrCompositionLayerBaseHeader* layers[4] = {scene[0], scene_count > 1 ? scene[1] : nullptr, nullptr, nullptr};
-        uint32_t count = std::min(scene_count, 2u);
+        const XrCompositionLayerBaseHeader* layers[5] = {scene[0], scene_count > 1 ? scene[1] : nullptr,
+                                                         scene_count > 2 ? scene[2] : nullptr, nullptr, nullptr};
+        uint32_t count = std::min(scene_count, 3u);
         if (retained_panel_valid_ && panel.requested && panel.placed) {
             panel_quad = OpenXRPanelQuadLayer(panel, runtime_->AppSpace(), retained_panel_swapchain_.handle);
             layers[count++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&panel_quad);
@@ -2707,8 +2751,13 @@ private:
             CreateEnvSwapchain(retained_env_swapchain_)) {
             env_swapchains_ready_ = true;
             std::ostringstream message;
+            const auto controllers = MenuControllersSetting();
             message << "OpenXR menu environment layer ready (" << width << 'x' << height << ", "
-                    << (MenuEnvironmentOver() ? "over" : "under") << " the screen)";
+                    << (MenuEnvironmentOver() ? "over" : "under") << " the screen); menu controllers: "
+                    << (controllers == MenuControllers::Projected                     ? "projected (screen in the environment, no quad)"
+                        : controllers == MenuControllers::Eyes && StereoPackedSetting() ? "eyes (a screen quad per eye)"
+                        : controllers == MenuControllers::Eyes ? "off (eyes needs KARTFRAME_STEREO_PACKED=1)"
+                                                               : "off");
             Log(OpenXRLogLevel::Info, message.str());
             return true;
         }

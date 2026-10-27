@@ -289,3 +289,12 @@ in that quad's place with its own view, blended with a constant alpha and depth-
 (aurora common.cpp link_composite_source; gx.cpp: the stereoStencil bit 2 pipeline sibling). KARTFRAME_GHOST_MONO=1
 keeps the flat composite; KARTFRAME_GHOST_ALPHA=<0..1> (0.5) the ghost's strength. Log lines "Time Trial ghost: pass
 N ... is drawn by each eye" (once) or "... left flat (<reason>)" (up to 4). Details: frame/perf/LANE_AE.md.
+
+## Lane AF switch (controllers in front of the menu screen)
+KARTFRAME_MENU_CONTROLLERS=off|eyes|projected (default off: the environment layer under the screen's quad, which
+hides the controllers and the ray where they overlap the screen). eyes (needs KARTFRAME_STEREO_PACKED=1, else off):
+the screen's image goes into both halves of the packed pair and each half gets that eye's view of the controllers
+and rays drawn in (projected from the eye onto the screen's plane, only what is between the eye and the screen);
+two quads, XR_EYE_VISIBILITY_LEFT and _RIGHT, one half each. projected: no screen quad; the screen's image is drawn
+into the environment projection layer (one more resample: softer text). The environment-ready log line names the
+mode. Details and what to expect: frame/perf/LANE_AF.md.
