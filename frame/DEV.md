@@ -303,3 +303,17 @@ and rays drawn in (projected from the eye onto the screen's plane, only what is 
 two quads, XR_EYE_VISIBILITY_LEFT and _RIGHT, one half each. projected: no screen quad; the screen's image is drawn
 into the environment projection layer (one more resample: softer text). The environment-ready log line names the
 mode. Details and what to expect: frame/perf/LANE_AF.md.
+
+## Lane AJ (game-thread CPU in Grand Prix; GX thread)
+KARTFRAME_GX_THREAD=0|1 overrides `[video] gx_thread` for one launch (off by default on Linux): the host side of
+GX (FIFO parsing, aurora's GX calls, draw recording) runs on the "MKW GX" thread, fed by an ordered command ring.
+Anything on the game thread that reaches aurora's FIFO (fifo::drain) must go through GxThread::Post (it runs inline
+when the thread is off); the nameplate depth/anchor hook did not, which corrupted the decode in every race.
+KARTFRAME_CPULOG=1: one `cpulog:` line a second from a monitor thread (game ms/frame: wall, cpu, runq, pace, other
+off-CPU; hook timers; the cores the game thread ran on; busiest threads run/wait ms per second @ last core; each
+allowed core's clock with any cap; the hottest thermal zone). KARTFRAME_GAME_CORE=<n>|auto[:shared] pins the game
+thread and keeps other threads off that core (unmeasured, default off). KARTFRAME_GX_SYNC=present (test only) drains
+the GX thread at each present. KARTFRAME_INTERP_MAX_MS=<ms> keeps the interpolation pair across boundary gaps up to
+<ms> rounded up to whole VI intervals (33: one missed retrace); default unset = 1.5 intervals. Wrapper:
+`thermal.tsv` in the session folder (KARTFRAME_THERMLOG=0 off). Mock: KF_MOCKRUN_VIDEO adds [video] lines.
+Details and numbers: frame/perf/LANE_AJ.md.

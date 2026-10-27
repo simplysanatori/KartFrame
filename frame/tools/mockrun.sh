@@ -8,7 +8,7 @@
 # also sets the game's KARTFRAME_FRAME_STAMP=1, MOCK_XR_PRESS the Frame controller profile),
 # KF_BUILD (build dir, default <repo>/build-linux), KF_MOCKRUN_HOME (scratch user dir, default
 # ~/.cache/kf-mockrun), KF_XRMOCK_DIR (where the mock is built; default one per checkout under
-# ~/.cache/kf-xrmock, rebuilt when its sources change), KF_MOCKRUN_VR (extra lines for the [vr]
+# ~/.cache/kf-xrmock, rebuilt when its sources change), KF_MOCKRUN_VIDEO (extra lines for the [video] section, e.g. 'gx_thread = true'), KF_MOCKRUN_VR (extra lines for the [vr]
 # section, e.g. 'frame_pacing = "pipelined"'), KF_MOCKRUN_RENDER_SCALE (render_scale, default 1.0;
 # 1.25 is the panel's native 2160 per eye), KF_MOCKRUN_INTRO=1 (the first-run welcome and controller
 # guide show instead of being seeded done). Lane X: with KARTFRAME_END_PHASE set, a fake compositor grid for the
@@ -63,6 +63,7 @@ dvd_root = "$DATA"
 [video]
 widescreen = true
 display_mode = "windowed"
+${KF_MOCKRUN_VIDEO:-}
 
 [vr]
 mirror_view = "none"

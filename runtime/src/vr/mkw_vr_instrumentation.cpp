@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "vr/mkw_vr_instrumentation.h"
+#include "cpu_monitor.h"
+#include "gx_thread.h"
 
 #include "memory.h"
 #include "ppc_runtime.h"
@@ -18,6 +20,29 @@
 extern "C" int g_gxFrameCount;
 
 namespace mkw::vr {
+
+// The nameplate HUD depth and anchor change aurora's state for the draws that follow, so aurora drains its
+// FIFO first. With the GX thread on, aurora's FIFO belongs to that thread: calling these from the game
+// thread decoded the FIFO concurrently with it (corrupt draws, then crashes; lane AJ). They are posted in
+// order with the GX commands instead; with the thread off, Post runs them inline as before.
+namespace {
+void SetHudWorldDepth_gx(float distance) { aurora_set_stereo_hud_world_depth(distance); }
+void SetHudWorldAnchor_gx(float x, float y) { aurora_set_stereo_hud_world_anchor(x, y); }
+// Game-thread mirrors: most layout controls set depth 0 again, which needs no record.
+float g_postedDepth = -1.f;
+float g_postedAnchor[2] = {-1e30f, -1e30f};
+void SetHudWorldDepth(float distance) {
+    if (distance == g_postedDepth) return;
+    g_postedDepth = distance;
+    GxThread::Post(&SetHudWorldDepth_gx, distance);
+}
+void SetHudWorldAnchor(float x, float y) {
+    if (x == g_postedAnchor[0] && y == g_postedAnchor[1]) return;
+    g_postedAnchor[0] = x;
+    g_postedAnchor[1] = y;
+    GxThread::Post(&SetHudWorldAnchor_gx, x, y);
+}
+} // namespace
 namespace {
 
 constexpr uint32_t kRaceSceneOnEnter = 0x80553C50u;
@@ -174,7 +199,7 @@ void PublishObservedCamera(uint64_t frame, uint32_t address) noexcept {
 }
 
 void ObserveRaceUiControl(const CpuContext* context) noexcept {
-    aurora_set_stereo_hud_world_depth(0.f);
+    SetHudWorldDepth(0.f);
     if (context == nullptr) return;
     const uint32_t control = context->gpr[3];
     uint32_t vtable = 0;
@@ -203,8 +228,8 @@ void ObserveRaceUiControl(const CpuContext* context) noexcept {
             distance2 += delta * delta;
         }
         if (std::isfinite(distance2) && distance2 > 0.f) {
-            aurora_set_stereo_hud_world_anchor(anchorX, anchorY);
-            aurora_set_stereo_hud_world_depth(std::sqrt(distance2));
+            SetHudWorldAnchor(anchorX, anchorY);
+            SetHudWorldDepth(std::sqrt(distance2));
         }
     } catch (const Memory::AccessViolation&) {
         // A control being torn down keeps the ordinary 2D presentation.
@@ -214,7 +239,7 @@ void ObserveRaceUiControl(const CpuContext* context) noexcept {
 } // namespace
 
 void MkwVRInstrumentationInitialize() noexcept {
-    aurora_set_stereo_hud_world_depth(0.f);
+    SetHudWorldDepth(0.f);
     MkwVRPolicySetAvailableBindings(
         MkwVRBindingSceneState | MkwVRBindingRaceCamera |
         MkwVRBindingDrawClassification | MkwVRBindingCulling);
@@ -228,7 +253,7 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
     const uint64_t frame = GuestFrame();
     switch (address) {
     case kRaceSceneOnEnter: {
-        aurora_set_stereo_hud_world_depth(0.f);
+        SetHudWorldDepth(0.f);
         {
             std::lock_guard lock(g_instrumentation_mutex);
             g_instrumentation = {};
@@ -250,7 +275,7 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
         break;
     }
     case kScnMgrRaceDraw: {
-        aurora_set_stereo_hud_world_depth(0.f);
+        SetHudWorldDepth(0.f);
         // RaceCamera objects are not a player-count source: the game may update
         // additional cameras for transitions and effects. Use the same exact
         // screen count as RaceScene::GetScreenCount, while retaining the camera
@@ -262,11 +287,12 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
         // Every kart and camera has been updated for this frame and none of
         // the frame's draws have been issued yet, so the values behind these
         // pointers are exactly the ones those draws will use.
+        cpumon::Scope timer(cpumon::kVrUpdate);
         MkwVRFirstPersonUpdate(frame, FirstCamera(frame));
         break;
     }
     case kRaceSceneOnExit: {
-        aurora_set_stereo_hud_world_depth(0.f);
+        SetHudWorldDepth(0.f);
         MkwVRSceneObservation scene{};
         scene.mode = VRSceneMode::Other;
         scene.guest_frame_index = frame;
@@ -280,9 +306,11 @@ extern "C" void MkwVRObserveTranslatedFunctionEntry(uint32_t address,
                                << std::endl;
         break;
     }
-    case kLayoutUIControlDraw:
+    case kLayoutUIControlDraw: {
+        cpumon::Scope timer(cpumon::kUiHook);
         ObserveRaceUiControl(context);
         break;
+    }
     case kNameBalloonUpdatePosition:
         if (context != nullptr)
             RememberNameplatePlayer(context->gpr[3], context->gpr[4] & 0xffu);

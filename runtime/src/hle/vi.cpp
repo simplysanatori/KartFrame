@@ -5,6 +5,7 @@
 #include "ppc_runtime.h"
 #include "aurora_events.h"
 #include "gx_thread.h"
+#include "cpu_monitor.h"
 #include <aurora/imgui.h>
 #include <algorithm>
 #include <array>
@@ -27,6 +28,8 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <string>
+#include <optional>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -697,7 +700,9 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         s_lastPresentAnchorNanos = 0;
     }
 
+    cpumon::GameFrame();
     mkw::vr::OpenXRServiceProducerFrameBoundary();
+    std::optional<cpumon::Scope> commitTimer(std::in_place, cpumon::kVrCommit);
     const SceneAnchorPublication anchor = PublishVrSceneAnchor();
     record.anchor = anchor.anchor;
     record.anchorValid = anchor.valid;
@@ -718,11 +723,16 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         vrPolicy.presentation == mkw::vr::VRPresentationMode::ImmersiveRace
             ? vrPolicy.scene.local_player_count : 1;
     record.contentTag = vrPolicy.content_tag;
+    commitTimer.reset();
     // The overlay drew into the game thread's ImGui frame; close it and hand a
     // copy of its draw data to the seal.
-    record.imguiFrame = aurora_imgui_host_frame_end();
+    {
+        cpumon::Scope timer(cpumon::kOverlay);
+        record.imguiFrame = aurora_imgui_host_frame_end();
+    }
     GxThread::Post(&GxPresent_gx, record);
     if (paceThisFrame) {
+        cpumon::Scope timer(cpumon::kPace);
         PaceToRetraceBoundary(paceDeadline);
         std::lock_guard<std::mutex> lock(g_viMutex);
         s_lastPacedRetraceCount = g_vi.retraceCount;
@@ -736,8 +746,24 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     // The GX thread begins the next frame right after the seal; the window's
     // thread pumps events, applies any surface change and starts the next
     // ImGui frame for the overlay.
-    UpdateAuroraAndProcessEvents();
-    ApplyPendingMkwDynamicAspectSurface();
+    // KARTFRAME_GX_SYNC=present (lane AJ, test): the game thread waits here until the GX thread has
+    // executed everything up to this frame's seal, so the next frame's guest logic (which rewrites
+    // material display lists and vertex/matrix arrays in place, as on the Wii after the GP is done)
+    // never runs while the GX thread still reads the previous frame's guest memory.
+    static const bool s_gxSyncPresent = [] {
+        const char* env = std::getenv("KARTFRAME_GX_SYNC");
+        return env != nullptr && std::string(env) == "present";
+    }();
+    if (s_gxSyncPresent && GxThread::Enabled()) {
+        cpumon::Scope timer(cpumon::kGxSync);
+        GxThread::Drain();
+    }
+    {
+        cpumon::Scope timer(cpumon::kEvents);
+        UpdateAuroraAndProcessEvents();
+        ApplyPendingMkwDynamicAspectSurface();
+    }
+    cpumon::Scope timer(cpumon::kOverlay);
     aurora_imgui_host_frame_begin();
 }
 

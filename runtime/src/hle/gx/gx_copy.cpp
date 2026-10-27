@@ -2,6 +2,7 @@
 #include "gx_internal.h"
 
 #include "settings_overlay.h"
+#include "cpu_monitor.h"
 
 #include <dolphin/gx/GXAurora.h>
 
@@ -140,7 +141,10 @@ extern "C" void GX__CopyDisp_8016fc38(uint32_t da, uint32_t c) {
     // Present immediately so post-copy draws don't leak into this frame. The
     // overlay draws into the game thread's own ImGui frame, whose draw data
     // the seal copies, so no frame-worker join is needed here.
-    settings_overlay::Draw();
+    {
+        cpumon::Scope timer(cpumon::kOverlay);
+        settings_overlay::Draw();
+    }
     // Seal, pace to the VI retrace boundary (Aurora renders the sealed frame
     // during the wait), and pre-warm the next frame.
     VI_HLE_PresentFrame(/*presentedXfb=*/true, /*paceToRetrace=*/true);
