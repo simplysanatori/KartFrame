@@ -16,6 +16,7 @@
 #include "runtime_config.h"
 #include "settings_overlay.h"
 #include "vr/mkw_vr_first_person.h"
+#include "vr/mkw_vr_item.h"
 #include "vr/openxr_diagnostics.h"
 
 #include <SDL3/SDL_gamepad.h>
@@ -27,8 +28,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <initializer_list>
 #include <mutex>
 #include <sstream>
@@ -233,7 +236,41 @@ uint32_t InjectedWiiRemoteButtons() {
     return hold;
 }
 
+// A [vr] key of Config.toml that runtime_config.h does not know (read here so that header, which
+// every translated file includes, stays untouched), as text; empty when absent.
+std::string ItemThrowConfigText(const char* key) {
+    try {
+        std::ifstream file(RuntimeConfigFile::ResolveConfigPath(), std::ios::binary);
+        if (!file) return {};
+        const auto document = toml::parse(file, "Config.toml");
+        if (auto text = RuntimeConfigFile::FindConfigValue<std::string>(document, "vr", key)) return *text;
+        if (auto flag = RuntimeConfigFile::FindConfigValue<bool>(document, "vr", key)) return *flag ? "true" : "false";
+        if (auto number = RuntimeConfigFile::FindConfigFloat(document, "vr", key)) {
+            std::ostringstream out;
+            out << *number;
+            return out.str();
+        }
+    } catch (const std::exception&) {
+    }
+    return {};
+}
+
+// The environment variable when set, else the [vr] key.
+std::string ItemThrowSetting(const char* env, const char* key) {
+    if (const char* value = std::getenv(env); value != nullptr && *value != '\0') return value;
+    return ItemThrowConfigText(key);
+}
+
 } // namespace
+
+// LANE-AH-STUB: the held-item read (mkw_vr_item.h's contract) is lane AH's, in mkw_vr_first_person.cpp
+// and declared in mkw_vr_first_person.h. Until it is merged this weak fallback reports no item, so a
+// swing throws nothing (KARTFRAME_THROW_INJECT still plays throws); the linker drops it for the real
+// definition. Remove this block after the merge.
+HeldItem MkwVRFirstPersonGetHeldItem() noexcept;
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak)) HeldItem MkwVRFirstPersonGetHeldItem() noexcept { return {}; }
+#endif
 
 OpenXRInput::OpenXRInput(OpenXRLogCallback logger) : m_logger(std::move(logger)) {}
 
@@ -274,6 +311,7 @@ bool OpenXRInput::Create(OpenXRRuntime& runtime) {
     m_created = true;
     CreatePoseSpaces();
     LoadInputClock();
+    LoadItemThrowSettings();
     if (!AttachVirtualGamepad()) {
         Log(OpenXRLogLevel::Warning,
             "SDL refused the virtual gamepad; OpenXR controllers will not reach the game");
@@ -702,6 +740,8 @@ void OpenXRInput::Destroy() {
     m_frame_view.Reset();
     m_frame_dpad = {};
     m_frame_layout = false;
+    m_injected_throw_held = false;
+    m_gamepad_rumble.Reset();
     m_options_previous=0;
     m_aim_pose = m_grip_pose = XR_NULL_HANDLE;
     m_hand_paths[0] = m_hand_paths[1] = XR_NULL_PATH;
@@ -740,6 +780,7 @@ void OpenXRInput::Idle() {
     m_frame_view.Reset();
     ResetDriving();
     StopRumble();
+    m_gamepad_rumble.Reset();
     // Nothing stays held on the gamepad either while input is away.
     if (m_joystick != nullptr) {
         Relay().Publish({});
@@ -1038,6 +1079,8 @@ void OpenXRInput::Sync(XrTime predicted_display_time, const OpenXRPointerScreen&
         ctx.view_back_pulse=frame_back_pulse;
         port=frame::Map(in,ctx,port);
     }
+    // Throwing the held item: a quick swing of the item hand forward or back plays an aimed throw.
+    UpdateItemThrow(dt_seconds, hands, port, panel.withheld);
     if(panel.withheld) {
         const auto rawX=port.raw_steering_x,rawY=port.raw_steering_y;
         port=QuestInput{.steamvr=port.steamvr,.active=true};port.raw_steering_x=rawX;port.raw_steering_y=rawY;
@@ -1202,7 +1245,160 @@ void OpenXRInput::ResetDriving() {
     m_wheel_held = {};
     m_wheel_time = 0;
     m_driving = {};
+    m_throw.Reset();
+    m_throw_sequence.Reset();
     OpenXRPublishDriving(m_driving);
+}
+
+void OpenXRInput::LoadItemThrowSettings() {
+    const auto flag = [](const std::string& text, bool fallback) {
+        if (text == "0" || text == "false" || text == "off") return false;
+        if (text == "1" || text == "true" || text == "on") return true;
+        return fallback;
+    };
+    const auto number = [](const std::string& text, float fallback, float low, float high) {
+        if (text.empty()) return fallback;
+        char* end = nullptr;
+        const float value = std::strtof(text.c_str(), &end);
+        return end != text.c_str() && value >= low && value <= high ? value : fallback;
+    };
+    m_throw_enabled = flag(ItemThrowSetting("KARTFRAME_THROW", "cockpit_item_throw"), true);
+    const std::string hand = ItemThrowSetting("KARTFRAME_THROW_HAND", "cockpit_item_hand");
+    if (hand == "off") m_throw_enabled = false;
+    m_throw_hand = hand == "right" ? 1u : 0u;
+    // Quest-tuned defaults (kControllerTuning: 18 cm forward, 15 cm back within 120 ms).
+    item_throw::Tuning tuning = item_throw::kControllerTuning;
+    tuning.forward_travel =
+        number(ItemThrowSetting("KARTFRAME_THROW_FORWARD_CM", "item_throw_forward_cm"), tuning.forward_travel * 100.0f, 5.0f, 60.0f) / 100.0f;
+    tuning.backward_travel =
+        number(ItemThrowSetting("KARTFRAME_THROW_BACK_CM", "item_throw_back_cm"), tuning.backward_travel * 100.0f, 5.0f, 60.0f) / 100.0f;
+    // The detector keeps 32 samples: about 0.26 s at 120 Hz.
+    tuning.window_seconds =
+        number(ItemThrowSetting("KARTFRAME_THROW_WINDOW_MS", "item_throw_window_ms"), tuning.window_seconds * 1000.0f, 40.0f, 250.0f) / 1000.0f;
+    m_throw.SetTuning(tuning);
+    m_throw.Reset();
+    m_throw_sequence.Reset();
+    // KARTFRAME_THROW_INJECT=<start s>/<every s>[/f|b|a] (tests): throws without a swing, forward,
+    // backward or alternating, like the Quest's adb injection; they skip the item check.
+    m_throw_inject_start = -1.0f;
+    m_throw_inject_count = 0;
+    if (const char* inject = std::getenv("KARTFRAME_THROW_INJECT"); inject != nullptr && *inject != '\0') {
+        float start = 0.0f, every = 0.0f;
+        char dir = 'f';
+        if (std::sscanf(inject, "%f/%f/%c", &start, &every, &dir) >= 2 && start >= 0.0f && every > 0.2f) {
+            m_throw_inject_start = start;
+            m_throw_inject_every = every;
+            m_throw_inject_dir = dir == 'b' || dir == 'a' ? dir : 'f';
+        }
+    }
+    m_throw_created = std::chrono::steady_clock::now();
+    std::ostringstream message;
+    message << "item throw: " << (m_throw_enabled ? "on" : "off") << ", " << (m_throw_hand ? "right" : "left")
+            << " hand, " << std::lround(tuning.forward_travel * 100.0f) << " cm forward / "
+            << std::lround(tuning.backward_travel * 100.0f) << " cm back within "
+            << std::lround(tuning.window_seconds * 1000.0f) << " ms";
+    if (m_throw_inject_start >= 0.0f) {
+        message << "; injected from " << m_throw_inject_start << " s every " << m_throw_inject_every << " s ("
+                << m_throw_inject_dir << ')';
+    }
+    message << "; gamepad rumble ";
+    if (OpenXRGamepadRumbleForwarded()) {
+        message << "amplitude " << OpenXRGamepadRumbleBase();
+    } else {
+        message << "off (KARTFRAME_RUMBLE)";
+    }
+    Log(OpenXRLogLevel::Info, message.str());
+    m_gamepad_rumble.SetBase(OpenXRGamepadRumbleBase());
+}
+
+void OpenXRInput::UpdateItemThrow(float dt_seconds, std::array<wii_remote::HandInputs, kHands>& hands, QuestInput& port,
+                                  bool withheld) {
+    const uint32_t hand = m_throw_hand;
+    item_throw::Direction direction = item_throw::Direction::None;
+    if (!withheld && m_driving.cockpit_active && m_throw_enabled) {
+        // The grip of the hand that shows the item, in the seated frame. The detector follows it with or
+        // without an item, so it always knows when the hand left the wheel.
+        const DrivingHand& located = m_driving.hands[hand];
+        const std::array<float, 12>& pose = located.seat_from_grip;
+        item_throw::HandSample sample{};
+        sample.tracked = located.tracked;
+        sample.held = located.held;
+        sample.bare = false; // no hand tracking on the native port
+        sample.position = {pose[3], pose[7], pose[11]};
+        direction = m_throw.Update(sample, dt_seconds);
+        // A swing with nothing to throw throws nothing: an item in the hand, or one already out
+        // behind or around the kart (which empties the hand).
+        if (direction != item_throw::Direction::None) {
+            const HeldItem item = MkwVRFirstPersonGetHeldItem();
+            if (!item.tethered && (!item.valid || item.count == 0)) {
+                const auto& measure = m_throw.Last();
+                std::ostringstream message;
+                message << "Swing " << item_throw::DirectionLabel(direction) << " ignored: nothing to throw ("
+                        << std::lround(std::fabs(measure.travel) * 100.0f) << " cm in "
+                        << std::lround(measure.seconds * 1000.0f) << " ms)";
+                Log(OpenXRLogLevel::Info, message.str());
+                direction = item_throw::Direction::None;
+            }
+        }
+    } else {
+        m_throw.Reset();
+    }
+    // Injected throws: the Quest's adb property (Android), KARTFRAME_THROW_INJECT (tests).
+    const bool injected_forward = Injected("throw_forward");
+    const bool injected_backward = Injected("throw_backward");
+    bool injected = false;
+    if ((injected_forward || injected_backward) && !m_injected_throw_held && !withheld) {
+        direction = injected_forward ? item_throw::Direction::Forward : item_throw::Direction::Backward;
+        injected = true;
+    }
+    m_injected_throw_held = injected_forward || injected_backward;
+    if (m_throw_inject_start >= 0.0f && !withheld) {
+        const float since = std::chrono::duration<float>(std::chrono::steady_clock::now() - m_throw_created).count();
+        if (since >= m_throw_inject_start + m_throw_inject_every * static_cast<float>(m_throw_inject_count)) {
+            const bool back = m_throw_inject_dir == 'b' || (m_throw_inject_dir == 'a' && (m_throw_inject_count & 1));
+            direction = back ? item_throw::Direction::Backward : item_throw::Direction::Forward;
+            injected = true;
+            ++m_throw_inject_count;
+        }
+    }
+    if (direction != item_throw::Direction::None) {
+        m_throw_sequence.Start(direction);
+        if (RuntimeConfigFile::VrWheelTuning().haptics) {
+            constexpr XrDuration kThrowPulseNs = 40'000'000;
+            ApplyHaptic(hand, 0.5f, kThrowPulseNs);
+        }
+        // What the swing measured, to tune the thresholds from a run log.
+        std::ostringstream message;
+        message << "Held item thrown " << item_throw::DirectionLabel(direction);
+        if (injected) {
+            message << " (injected)";
+        } else {
+            const auto& measure = m_throw.Last();
+            message << " (controller, " << std::lround(std::fabs(measure.travel) * 100.0f) << " cm in "
+                    << std::lround(measure.seconds * 1000.0f) << " ms" << (measure.bridged ? ", across a tracking gap" : "")
+                    << ')';
+        }
+        message << (OpenXRGetControllerMode() == OpenXRControllerMode::Gamepad ? " on the port" : " on the Nunchuk");
+        Log(OpenXRLogLevel::Info, message.str());
+    }
+    if (withheld) {
+        m_throw_sequence.Reset();
+        return;
+    }
+    if (OpenXRGetControllerMode() == OpenXRControllerMode::Gamepad) {
+        // pad.cpp maps this port over GameCube port 0: stick Y aims (a held wheel only replaces X),
+        // the item field is L. With swap_item_trick the game's item button is the trick field.
+        const bool swap = RuntimeConfigFile::Get().vrButtonMapping.swapItemTrick;
+        float item = swap ? (port.trick ? 1.0f : 0.0f) : port.item;
+        item_throw::ApplyToPort(m_throw_sequence, port.steering_y, item, dt_seconds);
+        if (swap) {
+            port.trick = item > 0.5f;
+        } else {
+            port.item = item;
+        }
+    } else {
+        m_throw_sequence.Apply(hands[0], dt_seconds);
+    }
 }
 
 void OpenXRInput::UpdateDriving(XrTime display_time, const driving::SeatFrame& seat,
@@ -1326,6 +1522,33 @@ void OpenXRInput::UpdateDriving(XrTime display_time, const driving::SeatFrame& s
 }
 
 void OpenXRInput::UpdateRumble() {
+    if (OpenXRGetControllerMode() == OpenXRControllerMode::Gamepad) {
+        // The GameCube motor (PAD__ControlMotor_HLE), shaped into an amplitude (openxr_gamepad_rumble.h).
+        const bool motor = OpenXRGamepadRumbleForwarded() && OpenXRGamepadRumbleMotor();
+        const bool was_playing = m_gamepad_rumble.Playing();
+        const auto out = m_gamepad_rumble.Update(motor);
+        if (out.action == gamepad_rumble::Shaper::Action::Pulse) {
+            for (uint32_t hand = 0; hand < kHandCount; ++hand) {
+                ApplyHaptic(hand, out.amplitude, out.duration_ns);
+                m_haptics_active[hand] = true;
+            }
+        } else if (out.action == gamepad_rumble::Shaper::Action::Stop) {
+            StopRumble();
+        }
+        // A line per rumble (the first 20, then every 100th), for the run log.
+        if (m_gamepad_rumble.Playing() != was_playing) {
+            if (m_gamepad_rumble.Playing()) ++m_gamepad_rumble_starts;
+            if (m_gamepad_rumble_starts <= 20 || m_gamepad_rumble_starts % 100 == 0) {
+                std::ostringstream message;
+                message << "gamepad rumble #" << m_gamepad_rumble_starts
+                        << (m_gamepad_rumble.Playing() ? " on, amplitude " : " off");
+                if (m_gamepad_rumble.Playing()) message << out.amplitude;
+                Log(OpenXRLogLevel::Info, message.str());
+            }
+        }
+        return;
+    }
+    m_gamepad_rumble.Reset();
     if (!OpenXRWiiRemoteRumbleRequested() || !OpenXRWiiRemoteOwnsGamepad(m_joystick_id)) {
         StopRumble();
         return;
@@ -1391,3 +1614,38 @@ void OpenXRInput::Log(OpenXRLogLevel level, const std::string& message) const no
 } // namespace mkw::vr
 
 #endif // defined(MKW_ENABLE_OPENXR)
+
+// The GameCube motor bridge (openxr_input.h), in every build: pad.cpp calls it with or without OpenXR.
+#include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+
+namespace mkw::vr {
+// Named rather than anonymous: runtime sources are unity-built in groups.
+namespace gamepad_rumble_bridge {
+std::atomic<bool> g_motor{false};
+} // namespace gamepad_rumble_bridge
+
+float OpenXRGamepadRumbleBase() noexcept {
+    static const float base = [] {
+        constexpr float kDefault = 0.7f;
+        const char* value = std::getenv("KARTFRAME_RUMBLE");
+        if (value == nullptr || *value == '\0' || !std::strcmp(value, "1") || !std::strcmp(value, "on")) return kDefault;
+        if (!std::strcmp(value, "0") || !std::strcmp(value, "off")) return 0.0f;
+        char* end = nullptr;
+        const float amplitude = std::strtof(value, &end);
+        if (end == value || !(amplitude >= 0.0f)) return kDefault;
+        return amplitude <= 0.0f ? 0.0f : std::clamp(amplitude, 0.05f, 1.0f);
+    }();
+    return base;
+}
+
+void OpenXRSetGamepadRumble(bool on) noexcept {
+    gamepad_rumble_bridge::g_motor.store(on, std::memory_order_relaxed);
+}
+
+bool OpenXRGamepadRumbleMotor() noexcept {
+    return gamepad_rumble_bridge::g_motor.load(std::memory_order_relaxed);
+}
+} // namespace mkw::vr

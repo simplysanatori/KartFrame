@@ -498,6 +498,16 @@ target_include_directories(mkw_vr_wii_remote_tests PRIVATE "${CMAKE_CURRENT_LIST
 target_compile_features(mkw_vr_wii_remote_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_vr_wii_remote_tests COMMAND mkw_vr_wii_remote_tests)
 
+# Throwing the held item with a swing (ported from iChris4's Wiicompiled_VR fork) and the GameCube
+# motor on the VR controllers in the gamepad mode (KartFrame). Header-only.
+foreach(test_name mkw_vr_item_throw_tests mkw_vr_gamepad_rumble_tests)
+    string(REGEX REPLACE "^mkw_" "" test_source "${test_name}")
+    add_executable(${test_name} "${CMAKE_CURRENT_LIST_DIR}/tests/${test_source}.cpp")
+    target_include_directories(${test_name} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    target_compile_features(${test_name} PRIVATE cxx_std_17)
+    add_test(NAME ${test_name} COMMAND ${test_name})
+endforeach()
+
 # The in-headset settings panel's controller chord, release latch, selection,
 # scrolling and canvas mapping, plus the thread bridge they publish through.
 add_executable(mkw_vr_settings_panel_tests tests/vr_settings_panel_tests.cpp src/vr/openxr_settings_panel.cpp src/vr/mkw_vr_policy.cpp)

@@ -2,11 +2,23 @@
 
 #pragma once
 
+namespace mkw::vr {
+// The GameCube motor of port 0 in the gamepad controller mode (pad.cpp, game thread) for the
+// controllers' haptics (pacing thread). Defined in openxr_input.cpp in every build.
+// KARTFRAME_RUMBLE: 0 / off, 1 / on (default, steady amplitude 0.7), or the amplitude 0.05..1.
+float OpenXRGamepadRumbleBase() noexcept;
+inline bool OpenXRGamepadRumbleForwarded() noexcept { return OpenXRGamepadRumbleBase() > 0.0f; }
+void OpenXRSetGamepadRumble(bool on) noexcept;
+bool OpenXRGamepadRumbleMotor() noexcept;
+} // namespace mkw::vr
+
 #if defined(MKW_ENABLE_OPENXR)
 
 #include "vr/camera_toggle.h"
 #include "vr/frame_controls.h"
 #include "vr/openxr_driving.h"
+#include "vr/openxr_gamepad_rumble.h"
+#include "vr/openxr_item_throw.h"
 #include "vr/openxr_runtime.h"
 #include "vr/openxr_settings_panel.h"
 #include "vr/openxr_wii_remote.h"
@@ -67,6 +79,16 @@ struct OpenXRPointerScreen {
 // the left stick's X axis in both presentations and that grip no longer reaches
 // the game (a shoulder on the gamepad; as a Wii Remote the grips are unbound,
 // so a hand on the wheel cannot hold down a button).
+//
+// Throwing the held item ([vr] cockpit_item_throw, openxr_item_throw.h, from iChris4's fork): in
+// the cockpit, a quick swing forward or back of the item hand pushes the stick that way while the
+// item button is pressed and released, which the game reads as an aimed throw. In the gamepad mode
+// it is played on the published port (stick Y and item, the GameCube's L), in the Wii Remote mode on
+// the left hand (Nunchuk stick and Z).
+//
+// Rumble: in the Wii Remote mode the remote's motor drives both controllers at full strength. In the
+// gamepad mode the GameCube motor of port 0 (PAD__ControlMotor_HLE) does, shaped by
+// openxr_gamepad_rumble.h (KARTFRAME_RUMBLE=0 off, or the steady amplitude 0.05..1, default 0.7).
 //
 // A right-thumbstick click on its own toggles the first-person camera, as its
 // F10 checkbox does (first_person_toggle_click).
@@ -142,6 +164,11 @@ private:
     void UpdateDriving(XrTime display_time, const driving::SeatFrame& seat,
                        std::array<wii_remote::HandInputs, kHands>& hands, bool withheld);
     void ResetDriving();
+    // After the port is built: the item hand's swing, and the throw it plays on the port (gamepad
+    // mode) or the left hand (Wii Remote mode).
+    void UpdateItemThrow(float dt_seconds, std::array<wii_remote::HandInputs, kHands>& hands, QuestInput& port,
+                         bool withheld);
+    void LoadItemThrowSettings();
     void UpdateRumble();
     void StopRumble();
     bool Check(XrResult result, const char* operation);
@@ -209,6 +236,20 @@ private:
     bool m_wheel_uses_geometry = false;
     bool m_wheel_bike = false;
     DrivingSnapshot m_driving{};
+    // Throwing the held item.
+    item_throw::ThrowDetector m_throw;
+    item_throw::ThrowSequence m_throw_sequence;
+    bool m_throw_enabled = true;
+    uint32_t m_throw_hand = 0; // 0 left, 1 right
+    bool m_injected_throw_held = false;
+    // KARTFRAME_THROW_INJECT (tests): scripted throws, seconds after Create.
+    float m_throw_inject_start = -1.0f, m_throw_inject_every = 0.0f;
+    std::chrono::steady_clock::time_point m_throw_created{};
+    int m_throw_inject_count = 0;
+    char m_throw_inject_dir = 'f';
+    // The GameCube motor in the gamepad mode.
+    gamepad_rumble::Shaper m_gamepad_rumble;
+    uint32_t m_gamepad_rumble_starts = 0;
     bool m_created = false;
     bool m_logged_sync_failure = false;
     bool m_logged_pointer = false;
