@@ -1424,6 +1424,19 @@ void ReadHeldItemLocked(uint32_t local_racer) noexcept {
     if (g_item_hand.load(std::memory_order_relaxed) == 2) return;
     LoadItemArchiveOnce();
     g_state.held_item = detail::ReadHeldItem<Memory>(local_racer, g_state.race_generation);
+    // Each change of the inventory, a few dozen times a race at most (mock evidence of real pick-ups).
+    static uint32_t logged_key = 0, logs = 0;
+    static uint64_t logged_race = 0;
+    const HeldItem& item = g_state.held_item;
+    const uint32_t key = item.valid ? (1u << 16) | (uint32_t(item.id) << 8) | item.count : 0u;
+    if (logged_race != g_state.race_generation) { logged_race = g_state.race_generation; logs = 0; logged_key = 0; }
+    if (key != logged_key && logs < 64) {
+        ++logs;
+        logged_key = key;
+        RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] held item: " << (item.valid ? "id " : "none")
+                               << (item.valid ? std::to_string(item.id) + " x" + std::to_string(item.count) : "")
+                               << (item.tethered ? " (items out)" : "") << std::endl;
+    }
     if (!g_state.held_item.valid && !g_state.held_item.tethered) {
         const HeldItem test = TestHeldItem(g_state.race_generation);
         if (test.valid) g_state.held_item = test;
