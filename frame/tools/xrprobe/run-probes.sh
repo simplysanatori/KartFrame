@@ -6,6 +6,7 @@
 # Environment: PROBE_SECONDS (30), PROBE_PAUSE (5), PROBE_OUT (output directory),
 #   XRPROBE (binary), VRTIMING (vrtiming.py; skipped when missing).
 # KartFrame session 13: PROBE_SET=replay runs the six --replay cases of replay-case.sh instead
+#   (PROBE_REPLAY_CASES="7 8 ..." picks other cases of replay-case.sh, e.g. session 21's 7-12; default 1-6)
 #   (KF_REPLAY_DIR names the recording). PROBE_MOCK=1 runs against the mock OpenXR runtime
 #   (frame/tools/xrmock, headless, never SteamVR) with a detailed trace per case ($OUT/<case>.trace),
 #   the finished-image check (MOCK_XR_BUSY_MS=1) and MOCK_XR_DUMP_AT dumps of the released images.
@@ -58,6 +59,7 @@ CASES=(
 if [ "${PROBE_SET:-}" = replay ]; then
     CASES=()
     while IFS='|' read -r num name _ args; do
+        case " ${PROBE_REPLAY_CASES:-1 2 3 4 5 6} " in *" $num "*) ;; *) continue ;; esac
         CASES+=("$name|$num|Look at a track-side edge, turn the head slowly left and right, hold still; one eye at a time. Doubled? Which eye?")
     done < <("$HERE/replay-case.sh" --list)
 fi

@@ -101,6 +101,10 @@ static struct {
     const char* replayWindow;  // standing | driving | a dump-time prefix
     const char* replayLabel;
     int replayOffset, replayPairs, replayQuad, replayHold, replaySets;
+    double replayGpuMs;        // --replay-gpu-ms: synthetic load per frame, 0 off (lane Y, session 21)
+    int replayGpuSplit;        // --replay-gpu-split K: the load as K queue submissions (0 or 1: one)
+    int replayGpuBefore;       // --replay-gpu-before: submit the load before xrEndFrame instead of after
+    int queuePriority;         // --queue-priority: VkQueueGlobalPriorityKHR of our one queue, 0 = none chained
 } g_opt = {MODE_NONE, 0, 0, 0, 0.0f, 30.0, -1.0, 14.0, "xrprobe.log", NULL, "driving", "", 0, 0, 0, 1, 0};
 
 static const char* modeName(void) {
@@ -150,6 +154,8 @@ static uint32_t segChar(char c) {
     case '5': case 'S': return 0x6D;
     case '6': return 0x7D;
     case '7': return 0x07;
+    case '8': return 0x7F;
+    case '9': return 0x6F;
     case 'A': return 0x77;
     case 'C': return 0x39;
     case 'd': return 0x5E;
@@ -431,17 +437,62 @@ static void createVulkan(XrSystemId system, Vk* vk) {
     LOG("queue family %u: %u queue(s), timestampValidBits %u", vk->queueFamily, qf[vk->queueFamily].queueCount,
         vk->timestampBits);
 
+    // Lane Y: global queue priority. Logged always (offered extensions, the family's priorities); chained
+    // only with --queue-priority. SteamVR creates the device from this create info (xrCreateVulkanDeviceKHR);
+    // whether it keeps the chained struct cannot be read back, a refusal (NOT_PERMITTED) can.
+    const char* prioExt = NULL;
+    {
+        uint32_t ne = 0;
+        vkEnumerateDeviceExtensionProperties(vk->phys, NULL, &ne, NULL);
+        VkExtensionProperties* ep = calloc(ne ? ne : 1, sizeof(*ep));
+        vkEnumerateDeviceExtensionProperties(vk->phys, NULL, &ne, ep);
+        int khr = 0, extp = 0, query = 0;
+        for (uint32_t i = 0; i < ne; i++) {
+            khr |= !strcmp(ep[i].extensionName, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+            extp |= !strcmp(ep[i].extensionName, VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME);
+            query |= !strcmp(ep[i].extensionName, "VK_EXT_global_priority_query");
+        }
+        free(ep);
+        prioExt = khr ? VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME : extp ? VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME : NULL;
+        char prios[128] = "not queried";
+        if (khr || query) {
+            VkQueueFamilyGlobalPriorityPropertiesKHR gp[16];
+            VkQueueFamilyProperties2 qf2[16];
+            uint32_t n2 = nq;
+            for (uint32_t i = 0; i < n2; i++) {
+                gp[i] = (VkQueueFamilyGlobalPriorityPropertiesKHR){VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR};
+                qf2[i] = (VkQueueFamilyProperties2){VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2, &gp[i]};
+            }
+            vkGetPhysicalDeviceQueueFamilyProperties2(vk->phys, &n2, qf2);
+            size_t o = 0;
+            prios[0] = 0;
+            for (uint32_t j = 0; j < gp[vk->queueFamily].priorityCount && j < VK_MAX_GLOBAL_PRIORITY_SIZE_KHR; j++)
+                o += (size_t)snprintf(prios + o, sizeof(prios) - o, "%s%d", j ? "," : "", (int)gp[vk->queueFamily].priorities[j]);
+        }
+        LOG("queue priority: VK_KHR_global_priority %s, VK_EXT_global_priority %s, VK_EXT_global_priority_query %s; family %u "
+            "priorities %s (128 low, 256 medium, 512 high, 1024 realtime); requested %d%s",
+            khr ? "offered" : "absent", extp ? "offered" : "absent", query ? "offered" : "absent", vk->queueFamily, prios,
+            g_opt.queuePriority, g_opt.queuePriority ? "" : " (none chained: the driver's default, medium)");
+        if (g_opt.queuePriority && !prioExt) {
+            LOG("queue priority: no global priority extension on this device; the queue keeps the default");
+            g_opt.queuePriority = 0;
+        }
+    }
+
     float prio = 1.0f;
+    VkDeviceQueueGlobalPriorityCreateInfoKHR gpci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR};
+    gpci.globalPriority = (VkQueueGlobalPriorityKHR)g_opt.queuePriority;
     VkDeviceQueueCreateInfo qci = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+    qci.pNext = g_opt.queuePriority ? &gpci : NULL;
     qci.queueFamilyIndex = vk->queueFamily;
     qci.queueCount = 1;
     qci.pQueuePriorities = &prio;
     VkPhysicalDeviceDynamicRenderingFeaturesKHR dr = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR};
     dr.dynamicRendering = VK_TRUE;
-    static const char* const devExts[] = {VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME};
+    const char* devExts[] = {VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, prioExt};
     VkDeviceCreateInfo dci = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &dr;
-    dci.enabledExtensionCount = 1;
+    dci.enabledExtensionCount = g_opt.queuePriority ? 2 : 1;
     dci.ppEnabledExtensionNames = devExts;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
@@ -450,7 +501,18 @@ static void createVulkan(XrSystemId system, Vk* vk) {
     xdci.pfnGetInstanceProcAddr = vkGetInstanceProcAddr;
     xdci.vulkanPhysicalDevice = vk->phys;
     xdci.vulkanCreateInfo = &dci;
-    XR_CHECK(createDev(g_instance, &xdci, &vk->device, &vr));
+    XrResult dxr = createDev(g_instance, &xdci, &vk->device, &vr);
+    if (g_opt.queuePriority && (XR_FAILED(dxr) || vr != VK_SUCCESS)) {
+        LOG("queue priority: device creation with priority %d refused (XrResult %d, VkResult %d); retrying without",
+            g_opt.queuePriority, (int)dxr, (int)vr);
+        g_opt.queuePriority = 0;
+        qci.pNext = NULL;
+        dci.enabledExtensionCount = 1;
+        dxr = createDev(g_instance, &xdci, &vk->device, &vr);
+    } else if (g_opt.queuePriority) {
+        LOG("queue priority: device created with global priority %d on %s", g_opt.queuePriority, prioExt);
+    }
+    XR_CHECK(dxr);
     VK_CHECK(vr);
     vkGetDeviceQueue(vk->device, vk->queueFamily, 0, &vk->queue);
     pfnBeginRendering = (PFN_vkCmdBeginRenderingKHR)vkGetDeviceProcAddr(vk->device, "vkCmdBeginRenderingKHR");
@@ -762,7 +824,14 @@ static void usage(FILE* f, const char* argv0) {
             "  --replay-quad     KartFrame's race quad (1 cm, transparent, 2 m ahead) after the projection\n"
             "  --replay-hold N   each set for N refreshes (2: 60 Hz content)\n"
             "  --replay-sets N   play only the first N sets of the window (less memory)\n"
-            "  --replay-label S  label drawn above the image (seven-segment cells, max 8)\n",
+            "  --replay-label S  label drawn above the image (seven-segment cells, max 8)\n"
+            "  --replay-gpu-ms N synthetic GPU load per frame (the pace modes' heavy pass into an offscreen\n"
+            "                    eye-sized image, calibrated, adapted every 60 frames, timestamped per piece),\n"
+            "                    submitted right after xrEndFrame on the probe's queue (KartFrame's next set)\n"
+            "  --replay-gpu-split K  the load as K separate vkQueueSubmit calls of N/K ms each (1..16)\n"
+            "  --replay-gpu-before   submit the load after the releases, before xrEndFrame\n"
+            "  --queue-priority P    low|medium|high|realtime: create the probe's queue with that global\n"
+            "                    priority (VK_KHR/EXT_global_priority; logged whether offered and accepted)\n",
             argv0);
 }
 
@@ -850,6 +919,20 @@ static int parseArgs(int argc, char** argv) {
             g_opt.replaySets = (int)d;
         } else if (!strcmp(a, "--replay-quad")) {
             g_opt.replayQuad = 1;
+        } else if ((v = optVal(argc, argv, &i, "--replay-gpu-ms"))) {
+            if (parseNum(v, 0.1, 8, &d)) goto bad;
+            g_opt.replayGpuMs = d;
+        } else if ((v = optVal(argc, argv, &i, "--replay-gpu-split"))) {
+            if (parseNum(v, 1, 16, &d)) goto bad;
+            g_opt.replayGpuSplit = (int)d;
+        } else if (!strcmp(a, "--replay-gpu-before")) {
+            g_opt.replayGpuBefore = 1;
+        } else if ((v = optVal(argc, argv, &i, "--queue-priority"))) {
+            if (!strcmp(v, "low")) g_opt.queuePriority = VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR;
+            else if (!strcmp(v, "medium")) g_opt.queuePriority = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+            else if (!strcmp(v, "high")) g_opt.queuePriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
+            else if (!strcmp(v, "realtime")) g_opt.queuePriority = VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR;
+            else goto bad;
         } else if ((v = optVal(argc, argv, &i, "--replay"))) {
             if (setMode(MODE_REPLAY)) goto twoModes;
             g_opt.replayDir = v;
@@ -879,7 +962,12 @@ static int parseArgs(int argc, char** argv) {
         fprintf(stderr, "xrprobe: --mv-head goes with --synth (with motion vectors) or --sequence\n");
         return -1;
     }
-    if (g_opt.mode != MODE_REPLAY && (g_opt.replayOffset || g_opt.replayPairs || g_opt.replayQuad || g_opt.replayHold != 1)) {
+    if ((g_opt.replayGpuSplit > 1 || g_opt.replayGpuBefore) && g_opt.replayGpuMs <= 0) {
+        fprintf(stderr, "xrprobe: --replay-gpu-split and --replay-gpu-before go with --replay-gpu-ms\n");
+        return -1;
+    }
+    if (g_opt.mode != MODE_REPLAY && (g_opt.replayOffset || g_opt.replayPairs || g_opt.replayQuad || g_opt.replayHold != 1 ||
+                                      g_opt.replayGpuMs > 0)) {
         fprintf(stderr, "xrprobe: the --replay-* options go with --replay\n");
         return -1;
     }
@@ -1494,6 +1582,220 @@ static void locateFor(XrSession session, XrSpace space, XrTime t) {
     XR_CHECK(xrLocateViews(session, &vli, &vs, 2, &nv, views));
 }
 
+// ---------------------------------------------------------------- lane Y: synthetic GPU load in the replay
+// --replay-gpu-ms N: N ms of the pace modes' heavy fragment pass a frame (two eye-sized passes per piece into an
+// offscreen image, as calibrate() times them), as K = --replay-gpu-split vkQueueSubmit calls on the probe's one
+// queue, right after xrEndFrame (KartFrame's next set) or, with --replay-gpu-before, before it. Every piece has
+// its own timestamp pair; a frame's results are read when its ring slot comes round again (LOAD_RING frames
+// later, its fence long signalled) and logged as one G line: sum of the pieces, span (first start to last end,
+// so span - sum is GPU time between our pieces that other work could use), submit time against the end call.
+#define LOAD_RING 4
+#define LOAD_MAX_SPLIT 16
+
+typedef struct {
+    int on, split;
+    uint32_t iters;  // per piece
+    int32_t w, h;
+    VkImage img;
+    VkDeviceMemory mem;
+    VkImageView view;
+    VkPipelineLayout layout;
+    VkPipeline heavy;
+    VkQueryPool q;  // LOAD_RING * LOAD_MAX_SPLIT * 2
+    VkCommandBuffer cmd[LOAD_RING][LOAD_MAX_SPLIT];
+    VkFence fence[LOAD_RING];
+    int pending[LOAD_RING];
+    uint64_t frameOf[LOAD_RING];
+    double c0[LOAD_RING], submitUs[LOAD_RING], submitCpuUs[LOAD_RING];
+    uint64_t count;
+    double adaptSum;
+    int adaptN;
+    double *sum, *span, *gap, *sub;
+    size_t n, cap;
+} Load;
+
+static void loadSetup(Load* L, Vk* vk, VkCommandPool pool, VkPipelineLayout layout, int64_t format, int32_t w, int32_t h) {
+    memset(L, 0, sizeof(*L));
+    L->on = 1;
+    L->split = g_opt.replayGpuSplit > 1 ? g_opt.replayGpuSplit : 1;
+    L->w = w;
+    L->h = h;
+    L->layout = layout;
+    L->heavy = makePipeline(vk->device, layout, kFullVert, sizeof(kFullVert), kHeavyFrag, sizeof(kHeavyFrag), (VkFormat)format,
+                            VK_FORMAT_UNDEFINED);
+    VkImageCreateInfo ici = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = (VkFormat)format;
+    ici.extent = (VkExtent3D){(uint32_t)w, (uint32_t)h, 1};
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VK_CHECK(vkCreateImage(vk->device, &ici, NULL, &L->img));
+    VkMemoryRequirements mr;
+    vkGetImageMemoryRequirements(vk->device, L->img, &mr);
+    VkMemoryAllocateInfo mai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = memoryType(vk, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (mai.memoryTypeIndex == UINT32_MAX) mai.memoryTypeIndex = memoryType(vk, mr.memoryTypeBits, 0);
+    VK_CHECK(vkAllocateMemory(vk->device, &mai, NULL, &L->mem));
+    VK_CHECK(vkBindImageMemory(vk->device, L->img, L->mem, 0));
+    VkImageViewCreateInfo vci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = L->img;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = (VkFormat)format;
+    vci.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VK_CHECK(vkCreateImageView(vk->device, &vci, NULL, &L->view));
+    VkQueryPoolCreateInfo qpci = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    qpci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qpci.queryCount = LOAD_RING * LOAD_MAX_SPLIT * 2;
+    VK_CHECK(vkCreateQueryPool(vk->device, &qpci, NULL, &L->q));
+    VkCommandBufferAllocateInfo cai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, NULL, pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                                       LOAD_RING * LOAD_MAX_SPLIT};
+    VK_CHECK(vkAllocateCommandBuffers(vk->device, &cai, &L->cmd[0][0]));
+    for (int i = 0; i < LOAD_RING; i++) {
+        VkFenceCreateInfo fci = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, NULL, VK_FENCE_CREATE_SIGNALED_BIT};
+        VK_CHECK(vkCreateFence(vk->device, &fci, NULL, &L->fence[i]));
+    }
+    L->cap = (size_t)(g_opt.seconds * 200 + 60000);
+    L->sum = malloc(sizeof(double) * L->cap);
+    L->span = malloc(sizeof(double) * L->cap);
+    L->gap = malloc(sizeof(double) * L->cap);
+    L->sub = malloc(sizeof(double) * L->cap);
+    if (vk->timestampBits == 0) {
+        LOG("FAIL --replay-gpu-ms needs timestamp queries on the queue");
+        die();
+    }
+    Gpu g = {vk, layout, L->heavy, L->q, pool};
+    L->iters = calibrate(&g, (VkFormat)format, w, h, g_opt.replayGpuMs / L->split);
+    LOG("replay load: %.2f ms a frame as %d submission(s) of %u iterations (two %dx%d passes each), %s xrEndFrame",
+        g_opt.replayGpuMs, L->split, L->iters, w, h, g_opt.replayGpuBefore ? "BEFORE" : "after");
+}
+
+static void loadRecord(Load* L, VkCommandBuffer cmd, int slot, int piece) {
+    VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkResetCommandBuffer(cmd, 0));
+    VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
+    uint32_t qi = (uint32_t)((slot * LOAD_MAX_SPLIT + piece) * 2);
+    vkCmdResetQueryPool(cmd, L->q, qi, 2);
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, L->q, qi);
+    for (int e = 0; e < 2; e++) {
+        imageBarrier(cmd, L->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderingAttachmentInfoKHR att = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR};
+        att.imageView = L->view;
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfoKHR ri = {VK_STRUCTURE_TYPE_RENDERING_INFO_KHR};
+        ri.renderArea.extent = (VkExtent2D){(uint32_t)L->w, (uint32_t)L->h};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &att;
+        pfnBeginRendering(cmd, &ri);
+        drawHeavy(cmd, L->layout, L->heavy, L->w, L->h, L->iters, 0.0f);
+        pfnEndRendering(cmd);
+    }
+    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, L->q, qi + 1);
+    VK_CHECK(vkEndCommandBuffer(cmd));
+}
+
+// A finished slot: its G line, the summary arrays, the adaptation of the iteration count.
+static void loadCollect(Load* L, const Vk* vk, int s) {
+    if (!L->pending[s]) return;
+    L->pending[s] = 0;
+    uint64_t ts[LOAD_MAX_SPLIT * 2];
+    if (vkGetQueryPoolResults(vk->device, L->q, (uint32_t)(s * LOAD_MAX_SPLIT * 2), (uint32_t)(L->split * 2), sizeof(ts), ts,
+                              sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS)
+        return;
+    double sum = 0, mx = 0;
+    char pieces[LOAD_MAX_SPLIT * 8 + 8];
+    size_t o = 0;
+    pieces[0] = 0;
+    for (int i = 0; i < L->split; i++) {
+        double d = timestampMs(vk, &ts[2 * i]);
+        sum += d;
+        if (d > mx) mx = d;
+        if (L->split > 1) o += (size_t)snprintf(pieces + o, sizeof(pieces) - o, "%s%.2f", i ? "," : " pieces_ms=", d);
+    }
+    uint64_t se[2] = {ts[0], ts[2 * L->split - 1]};
+    double span = timestampMs(vk, se), gap = span - sum;
+    FLOG("G n=%llu k=%d iters=%u sum_ms=%.3f span_ms=%.3f gap_ms=%.3f submit_us=%.0f submit_cpu_us=%.0f%s",
+         (unsigned long long)L->frameOf[s], L->split, L->iters, sum, span, gap, L->submitUs[s], L->submitCpuUs[s], pieces);
+    if (L->n < L->cap) {
+        L->sum[L->n] = sum;
+        L->span[L->n] = span;
+        L->gap[L->n] = gap;
+        L->sub[L->n] = L->submitUs[s];
+        L->n++;
+    }
+    L->adaptSum += sum;
+    if (++L->adaptN == 60) {
+        double avg = L->adaptSum / L->adaptN, scale = g_opt.replayGpuMs / avg;
+        if (fabs(scale - 1.0) > 0.05) {
+            if (scale > 1.5) scale = 1.5;
+            if (scale < 0.67) scale = 0.67;
+            uint32_t next = (uint32_t)(L->iters * scale + 0.5);
+            if (next < 1) next = 1;
+            LOG("replay load: mean %.2f ms over 60 frames, iterations %u -> %u", avg, L->iters, next);
+            L->iters = next;
+        }
+        L->adaptSum = 0;
+        L->adaptN = 0;
+    }
+}
+
+// Submits one frame's load; returns its slot (the caller fills submitUs against the end call).
+static int loadSubmit(Load* L, const Vk* vk, uint64_t frame) {
+    int s = (int)(L->count++ % LOAD_RING);
+    VK_CHECK(vkWaitForFences(vk->device, 1, &L->fence[s], VK_TRUE, UINT64_MAX));
+    loadCollect(L, vk, s);
+    VK_CHECK(vkResetFences(vk->device, 1, &L->fence[s]));
+    for (int i = 0; i < L->split; i++) loadRecord(L, L->cmd[s][i], s, i);
+    double c0 = nowSec();
+    for (int i = 0; i < L->split; i++) submitWith(vk, L->cmd[s][i], i == L->split - 1 ? L->fence[s] : VK_NULL_HANDLE);
+    L->submitCpuUs[s] = (nowSec() - c0) * 1e6;
+    L->c0[s] = c0;
+    L->frameOf[s] = frame;
+    L->pending[s] = 1;
+    return s;
+}
+
+static void loadFinish(Load* L, Vk* vk) {
+    if (!L->on) return;
+    vkDeviceWaitIdle(vk->device);
+    for (uint64_t i = 0; i < LOAD_RING; i++) loadCollect(L, vk, (int)((L->count + i) % LOAD_RING));
+    double a, b, c;
+    LOG("SUMMARY replay load: %llu frames with load, %d submission(s) each, %s xrEndFrame, final %u iterations a piece, queue "
+        "priority %d", (unsigned long long)L->count, L->split, g_opt.replayGpuBefore ? "before" : "after", L->iters,
+        g_opt.queuePriority);
+    if (L->n) {
+        percentiles(L->sum, L->n, &a, &b, &c);
+        LOG("SUMMARY replay load GPU ms (sum of pieces) p50 %.3f p95 %.3f max %.3f (n %zu)", a, b, c, L->n);
+        percentiles(L->span, L->n, &a, &b, &c);
+        LOG("SUMMARY replay load span ms (first start to last end) p50 %.3f p95 %.3f max %.3f", a, b, c);
+        percentiles(L->gap, L->n, &a, &b, &c);
+        LOG("SUMMARY replay load gaps between pieces ms p50 %.3f p95 %.3f max %.3f", a, b, c);
+        percentiles(L->sub, L->n, &a, &b, &c);
+        LOG("SUMMARY replay load submit us against the end call (%s) p50 %.0f p95 %.0f max %.0f",
+            g_opt.replayGpuBefore ? "start of the call; negative = before" : "its return", a, b, c);
+    }
+    vkDestroyQueryPool(vk->device, L->q, NULL);
+    for (int i = 0; i < LOAD_RING; i++) vkDestroyFence(vk->device, L->fence[i], NULL);
+    vkDestroyPipeline(vk->device, L->heavy, NULL);
+    vkDestroyImageView(vk->device, L->view, NULL);
+    vkDestroyImage(vk->device, L->img, NULL);
+    vkFreeMemory(vk->device, L->mem, NULL);
+    free(L->sum);
+    free(L->span);
+    free(L->gap);
+    free(L->sub);
+}
+
 // The frame loop of --replay. pairs 0: GalaxyFrame's order (locate, acquire, blit, fence wait, release,
 // end), one swapchain per eye. pairs >= 3: KartFrame's sets ahead: end each frame at once with the newest
 // finished set due by its display time (else the retained layer), then start the set for two refreshes
@@ -1561,6 +1863,11 @@ static int runReplay(XrSession session, XrSpace local, Vk* vk, const XrViewConfi
     }
     VkDeviceMemory srcMem;
     VkImage src = replayUpload(vk, pool, &srcMem);
+    Load load;
+    memset(&load, 0, sizeof(load));
+    if (g_opt.replayGpuMs > 0)
+        loadSetup(&load, vk, pool, layout, colorFormat, (int32_t)vcv[0].recommendedImageRectWidth,
+                  (int32_t)vcv[0].recommendedImageRectHeight);
 
     // The race quad: every image cleared to transparent once (acquired, cleared, the GPU waited for, released).
     for (uint32_t i = 0; quad.handle && i < quad.count; i++) {
@@ -1751,7 +2058,13 @@ static int runReplay(XrSession session, XrSpace local, Vk* vk, const XrViewConfi
         fei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
         fei.layerCount = nl;
         fei.layers = layers;
+        int ls = -1;
+        if (load.on && fs.shouldRender && g_opt.replayGpuBefore) ls = loadSubmit(&load, vk, n);
+        double tEndCall = nowSec();
         XrResult er = xrEndFrame(session, &fei);
+        double tEndRet = nowSec();
+        if (load.on && fs.shouldRender && !g_opt.replayGpuBefore) ls = loadSubmit(&load, vk, n);
+        if (ls >= 0) load.submitUs[ls] = (load.c0[ls] - (g_opt.replayGpuBefore ? tEndCall : tEndRet)) * 1e6;
         if (XR_FAILED(er)) {
             LOG("xrEndFrame frame %llu -> %s", (unsigned long long)n, xrStr(er));
             if (er == XR_ERROR_SESSION_LOST || er == XR_ERROR_INSTANCE_LOST) die();
@@ -1808,6 +2121,7 @@ static int runReplay(XrSession session, XrSpace local, Vk* vk, const XrViewConfi
         percentiles(fenceMs, nFence, &a, &b, &c);
         LOG("SUMMARY replay fence wait before release ms p50 %.3f p95 %.3f max %.3f", a, b, c);
     }
+    loadFinish(&load, vk);
     LOG("cases completed: %d of 1", caseTime >= g_opt.seconds);
     free(fenceMs);
     for (int i = 0; i < REPLAY_MAX_PAIRS; i++) vkDestroyFence(vk->device, fences[i], NULL);

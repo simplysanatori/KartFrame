@@ -692,6 +692,41 @@ public:
                 timeline.timelineSemaphore = VK_FALSE;
             }
         }
+        // Lane Y (test only, default off): KARTFRAME_QUEUE_PRIORITY=low|medium|high|realtime chains
+        // VkDeviceQueueGlobalPriorityCreateInfoKHR onto every queue Dawn asks for (one: the queue SteamVR's client
+        // also submits on in this process) and enables VK_KHR_global_priority (or the EXT) when the device offers
+        // it. A refusal (NOT_PERMITTED for high/realtime without CAP_SYS_NICE) retries with Dawn's own request.
+        const auto plain_info = vk_info;
+        std::vector<VkDeviceQueueCreateInfo> queues;
+        std::vector<VkDeviceQueueGlobalPriorityCreateInfoKHR> priorities;
+        std::vector<const char*> device_extensions;
+        const int priority = QueuePrioritySetting();
+        if (priority != 0) {
+            const char* ext = PriorityExtension(get_proc, owner.vk_instance_, vk_physical);
+            std::ostringstream line;
+            line << "queue priority: KARTFRAME_QUEUE_PRIORITY " << priority << ", ";
+            if (ext == nullptr) {
+                line << "no global priority extension on this device; Dawn's queue keeps the default";
+            } else {
+                queues.assign(vk_info.pQueueCreateInfos, vk_info.pQueueCreateInfos + vk_info.queueCreateInfoCount);
+                priorities.resize(queues.size());
+                for (size_t i = 0; i < queues.size(); ++i) {
+                    priorities[i] = VkDeviceQueueGlobalPriorityCreateInfoKHR{VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR};
+                    priorities[i].pNext = queues[i].pNext;
+                    priorities[i].globalPriority = static_cast<VkQueueGlobalPriorityKHR>(priority);
+                    queues[i].pNext = &priorities[i];
+                }
+                vk_info.pQueueCreateInfos = queues.data();
+                device_extensions.assign(vk_info.ppEnabledExtensionNames, vk_info.ppEnabledExtensionNames + vk_info.enabledExtensionCount);
+                bool have = false;
+                for (const char* e : device_extensions) have |= std::strcmp(e, ext) == 0;
+                if (!have) device_extensions.push_back(ext);
+                vk_info.enabledExtensionCount = static_cast<uint32_t>(device_extensions.size());
+                vk_info.ppEnabledExtensionNames = device_extensions.data();
+                line << "chained on " << queues.size() << " queue(s) with " << ext;
+            }
+            owner.Log(OpenXRLogLevel::Info, line.str());
+        }
         XrVulkanDeviceCreateInfoKHR create{XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR};
         create.systemId = owner.runtime_->SystemId();
         create.pfnGetInstanceProcAddr = get_proc;
@@ -699,12 +734,51 @@ public:
         create.vulkanCreateInfo = &vk_info;
         create.vulkanAllocator = static_cast<const VkAllocationCallbacks*>(allocator);
         VkResult result = VK_ERROR_INITIALIZATION_FAILED;
-        const XrResult xr = owner.create_device_(owner.runtime_->Instance(), &create, reinterpret_cast<VkDevice*>(out), &result);
+        XrResult xr = owner.create_device_(owner.runtime_->Instance(), &create, reinterpret_cast<VkDevice*>(out), &result);
+        if (!queues.empty()) {
+            if (XR_FAILED(xr) || result != VK_SUCCESS) {
+                owner.Log(OpenXRLogLevel::Warning, "queue priority: device creation refused (XrResult " + std::to_string(xr) +
+                                                 ", VkResult " + std::to_string(result) + "); retrying with Dawn's own request");
+                vk_info = plain_info;
+                result = VK_ERROR_INITIALIZATION_FAILED;
+                xr = owner.create_device_(owner.runtime_->Instance(), &create, reinterpret_cast<VkDevice*>(out), &result);
+            } else {
+                owner.Log(OpenXRLogLevel::Info, "queue priority: device created with global priority " + std::to_string(priority));
+            }
+        }
         if (XR_SUCCEEDED(xr) && result == VK_SUCCESS) {
             owner.timeline_semaphores_ = timeline.timelineSemaphore == VK_TRUE;
             owner.LogDeviceLayers(get_proc, vk_physical);
         }
         return XR_SUCCEEDED(xr) ? result : VK_ERROR_INITIALIZATION_FAILED;
+    }
+    // KARTFRAME_QUEUE_PRIORITY (lane Y): the VkQueueGlobalPriorityKHR value, 0 when unset or unknown.
+    static int QueuePrioritySetting() {
+        static const int value = [] {
+            const char* env = std::getenv("KARTFRAME_QUEUE_PRIORITY");
+            if (env == nullptr || *env == '\0') return 0;
+            const std::string_view v(env);
+            return v == "low" ? static_cast<int>(VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR)
+                 : v == "medium" ? static_cast<int>(VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR)
+                 : v == "high" ? static_cast<int>(VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR)
+                 : v == "realtime" ? static_cast<int>(VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR) : 0;
+        }();
+        return value;
+    }
+    static const char* PriorityExtension(PFN_vkGetInstanceProcAddr get_proc, VkInstance instance, VkPhysicalDevice physical) {
+        if (!get_proc || !instance) return nullptr;
+        const auto enumerate = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+            get_proc(instance, "vkEnumerateDeviceExtensionProperties"));
+        uint32_t count = 0;
+        if (!enumerate || enumerate(physical, nullptr, &count, nullptr) != VK_SUCCESS) return nullptr;
+        std::vector<VkExtensionProperties> offered(count);
+        if (enumerate(physical, nullptr, &count, offered.data()) != VK_SUCCESS) return nullptr;
+        bool khr = false, ext = false;
+        for (uint32_t i = 0; i < count && i < offered.size(); ++i) {
+            khr |= std::strcmp(offered[i].extensionName, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME) == 0;
+            ext |= std::strcmp(offered[i].extensionName, VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME) == 0;
+        }
+        return khr ? VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME : ext ? VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME : nullptr;
     }
     // The Vulkan layer chain, logged once at startup: Valve's FDM injection (an implicit
     // layer of SteamVR's) and the validation layer change what reaches the driver.

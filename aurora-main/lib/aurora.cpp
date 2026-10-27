@@ -2581,11 +2581,30 @@ void run_retained_stereo_frame(gfx::SealedFrame& sealedFrame) noexcept {
     g_directEyesCalibration.not_applied();  // a trial set that could not go straight in: not a sample
   }
   g_directEyesCalibration.begin(encoder);
+  // Lane Y (test only, default 1): KARTFRAME_SET_SUBMIT_SPLIT=2 submits a set's GPU work as two queue submissions
+  // (eye 0 | eye 1 and the sink), 3 as three (eye 0 | eye 1 | the sink), so the GPU scheduler can run other
+  // clients' work (SteamVR's compositor) between them. The timing marks and the direct-eyes calibration are
+  // query-set based and span the pieces; the eye images are released after the last piece's completion as before.
+  static const uint32_t submitSplit = [] {
+    const char* env = std::getenv("KARTFRAME_SET_SUBMIT_SPLIT");
+    const uint32_t k = env != nullptr && (env[0] == '2' || env[0] == '3') && env[1] == '\0' ? uint32_t(env[0] - '0') : 1u;
+    if (k > 1) Log.info("set submit split: {} queue submissions a set ({})", k, k == 2 ? "eye 0 | eye 1 + sink" : "eye 0 | eye 1 | sink");
+    return k;
+  }();
+  const auto submitPiece = [&encoder] {
+    const auto piece = encoder.Finish();
+    {
+      std::lock_guard submitLock(g_queueSubmitMutex);
+      g_queue.Submit(1, &piece);
+    }
+    encoder = g_device.CreateCommandEncoder();
+  };
   for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
     gfx::render_stereo_eye(sealedFrame, encoder, replay, eye, false);
     // The panel texture from the last sealed frame; its draw data is not ours to touch here.
     stereo_overlay::composite_immersive(encoder, eye_output_view(eye), replay.eyes[eye].projection,
                                         replay.eyes[eye].viewFromCenter, eye);
+    if (eye + 1 < submitSplit) submitPiece();
   }
   gfx::gpu_timing_mark(encoder, gfx::GpuTimingCategory::Sink);
   const auto sink = run_stereo_sink(encoder, input->frameToken, g_retainedStereo.logicalFrame, input->mode, true,
