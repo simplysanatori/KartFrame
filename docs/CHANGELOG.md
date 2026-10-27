@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Compacted-layout shaders bake the position-matrix index as the constant 0 instead of a uniform load with a dynamic index (ported from iChris4/Wiicompiled_VR 236665c, GPL-3.0).
+- Projected reflections (Rainbow Road, Coconut Mall glass) no longer follow the head: texgen-only position matrices keep the recorded camera in eye replay (ported from iChris4/Wiicompiled_VR 4aac0ec, GPL-3.0).
 
 ## 0.9.0-alpha.1 (October 2026), pre-release
 
