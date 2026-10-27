@@ -94,7 +94,7 @@ bool StampEnabled() {
 // before this set's submission and after the last one's, so reusing it per eye is safe), then copied into
 // the eye image with one copy. One pixel a bit (lane P; 4x4 cells before): 64x15 pixels, 3.8 KB an eye.
 void WriteStamp(wgpu::CommandEncoder& encoder, const wgpu::Texture& target, wgpu::TextureFormat format, uint64_t value,
-                uint32_t eye, const stereo::EyeScene& scene) {
+                uint32_t eye, const stereo::EyeScene& scene, uint32_t x = 0) {
   constexpr uint32_t kWidth = 64 * kStampCell, kHeight = kStampRows * kStampCell;
   static std::array<wgpu::Texture, 2> blocks;
   static std::array<wgpu::TextureFormat, 2> blockFormats{};
@@ -138,8 +138,18 @@ void WriteStamp(wgpu::CommandEncoder& encoder, const wgpu::Texture& target, wgpu
   const wgpu::TexelCopyTextureInfo block{.texture = blocks[slot]};
   const wgpu::TexelCopyBufferLayout layout{.bytesPerRow = kWidth * 4, .rowsPerImage = kHeight};
   webgpu::g_queue.WriteTexture(&block, pixels.data(), pixels.size(), &layout, &size);
-  const wgpu::TexelCopyTextureInfo destination{.texture = target};
+  const wgpu::TexelCopyTextureInfo destination{.texture = target, .origin = {x, 0, 0}};
   encoder.CopyTextureToTexture(&block, &destination, &size);
+}
+// Lane AA, KARTFRAME_STEREO_PACKED=1 (test only, read by the OpenXR backend as well): a set's eyes share one
+// swapchain image, eye N in the half at x = N * eye width. The backend then hands the same image as both eye
+// targets (twice the eye's width), and in the menus the screen's target is that image too (its left half).
+bool PackedSetting() {
+  static const bool packed = [] {
+    const char* env = std::getenv("KARTFRAME_STEREO_PACKED");
+    return env != nullptr && env[0] == '1';
+  }();
+  return packed;
 }
 // Set on the frame worker around the submitted callback (see aurora_vulkan_win32_submitting_retained).
 thread_local bool submittingRetained = false;
@@ -262,9 +272,12 @@ public:
          : f == wgpu::TextureFormat::RGBA8Unorm ? wgpu::TextureFormat::RGBA8UnormSrgb
                                                 : f;
   }
-  wgpu::RenderPipeline srgbPipeline;
-  wgpu::TextureFormat srgbPipelineFormat = wgpu::TextureFormat::Undefined;
-  const wgpu::RenderPipeline& SrgbPipeline(wgpu::TextureFormat format) {
+  // [1]: the packed variant (KARTFRAME_STEREO_PACKED), whose right eye's fragments sit one eye width to the right.
+  std::array<wgpu::RenderPipeline, 2> srgbPipelines;
+  std::array<wgpu::TextureFormat, 2> srgbPipelineFormats{wgpu::TextureFormat::Undefined, wgpu::TextureFormat::Undefined};
+  const wgpu::RenderPipeline& SrgbPipeline(wgpu::TextureFormat format, bool packed = false) {
+    auto& srgbPipeline = srgbPipelines[packed ? 1 : 0];
+    auto& srgbPipelineFormat = srgbPipelineFormats[packed ? 1 : 0];
     if (srgbPipeline && srgbPipelineFormat == format) return srgbPipeline;
     wgpu::ShaderSourceWGSL code{};
     code.code = R"(
@@ -282,6 +295,26 @@ public:
         return vec4f(decode(c.r), decode(c.g), decode(c.b), 1.0);
       }
     )";
+    if (packed) {
+      code.code = R"(
+      @group(0) @binding(0) var s: sampler;
+      @group(0) @binding(1) var t: texture_2d<f32>;
+      @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+        let p = array(vec2f(-1.0, 1.0), vec2f(-1.0, -3.0), vec2f(3.0, 1.0));
+        return vec4f(p[i], 0.0, 1.0);
+      }
+      fn decode(c: f32) -> f32 {
+        return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045);
+      }
+      @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+        var q = vec2i(p.xy);
+        let w = i32(textureDimensions(t).x);
+        if (q.x >= w) { q.x -= w; }
+        let c = textureLoad(t, q, 0);
+        return vec4f(decode(c.r), decode(c.g), decode(c.b), 1.0);
+      }
+    )";
+    }
     wgpu::ShaderModuleDescriptor md{};
     md.nextInChain = &code;
     const auto module = webgpu::g_device.CreateShaderModule(&md);
@@ -300,6 +333,47 @@ public:
   std::vector<std::pair<WGPUTextureView, wgpu::BindGroup>> blitSources;
   std::vector<std::pair<WGPUTexture, wgpu::TextureView>> blitTargets;
   wgpu::Sampler blitSampler;
+  // The bind group reading `source` (cached).
+  const wgpu::BindGroup& BlitSource(const wgpu::TextureView& source) {
+    if (!blitSampler) {
+      const wgpu::SamplerDescriptor sd{.magFilter = wgpu::FilterMode::Nearest, .minFilter = wgpu::FilterMode::Nearest};
+      blitSampler = webgpu::g_device.CreateSampler(&sd);
+    }
+    auto src = std::find_if(blitSources.begin(), blitSources.end(), [&](const auto& e) { return e.first == source.Get(); });
+    if (src == blitSources.end()) {
+      if (blitSources.size() >= 8) blitSources.erase(blitSources.begin());
+      blitSources.emplace_back(source.Get(), webgpu::create_copy_bind_group(source, blitSampler));
+      src = blitSources.end() - 1;
+    }
+    return src->second;
+  }
+  // KARTFRAME_STEREO_PACKED: `n` eyes into the halves of one packed image (eye k at x = k * eye width), one
+  // render pass, one draw per eye in its own viewport.
+  void BlitPacked(wgpu::CommandEncoder& encoder, const wgpu::TextureView* const* sources, uint32_t n,
+                  uint32_t eyeWidth, uint32_t height, const wgpu::Texture& target) {
+    std::array<wgpu::BindGroup, 2> groups;
+    for (uint32_t k = 0; k < n; ++k) groups[k] = BlitSource(*sources[k]);
+    auto dst = std::find_if(blitTargets.begin(), blitTargets.end(), [&](const auto& e) { return e.first == target.Get(); });
+    if (dst == blitTargets.end()) {
+      if (blitTargets.size() >= 16) blitTargets.erase(blitTargets.begin());
+      blitTargets.emplace_back(target.Get(), target.CreateView());
+      dst = blitTargets.end() - 1;
+    }
+    const wgpu::RenderPassColorAttachment ca{.view = dst->second, .loadOp = wgpu::LoadOp::Clear,
+                                             .storeOp = wgpu::StoreOp::Store};
+    const wgpu::RenderPassDescriptor rd{.label = "VR eyes to packed swapchain", .colorAttachmentCount = 1,
+                                        .colorAttachments = &ca};
+    auto pass = encoder.BeginRenderPass(&rd);
+    pass.SetPipeline(SinkMode() == Sink::Srgb ? SrgbPipeline(target.GetFormat(), true) : webgpu::g_CopyPipeline);
+    for (uint32_t k = 0; k < n; ++k) {
+      pass.SetViewport(static_cast<float>(k * eyeWidth), 0.f, static_cast<float>(eyeWidth), static_cast<float>(height),
+                       0.f, 1.f);
+      pass.SetScissorRect(k * eyeWidth, 0, eyeWidth, height);
+      pass.SetBindGroup(0, groups[k], 0, nullptr);
+      pass.Draw(3);
+    }
+    pass.End();
+  }
   void Blit(wgpu::CommandEncoder& encoder, const wgpu::TextureView& source, const wgpu::Texture& target) {
     if (!blitSampler) {
       const wgpu::SamplerDescriptor sd{.magFilter = wgpu::FilterMode::Nearest, .minFilter = wgpu::FilterMode::Nearest};
@@ -373,11 +447,20 @@ public:
     for (uint32_t i = 0; i < count; ++i) sources[i] = frame.eyes[i];
     if (panel && !stereo_overlay::layer_source(encoder, targets[count].width, targets[count].height, sources[count]))
       return false;
+    // KARTFRAME_STEREO_PACKED: the x of eye i's half in its target (an eye half as wide as its target), -1
+    // when the eye fills its target.
+    const auto region = [&](uint32_t i) -> int32_t {
+      if (!PackedSetting() || i >= count || sources[i].size.width * 2 != targets[i].width ||
+          sources[i].size.height != targets[i].height)
+        return -1;
+      return i == 1 && targets[1].resource == targets[0].resource ? static_cast<int32_t>(sources[i].size.width) : 0;
+    };
     // Validate/import every target before recording any copy.
     for (uint32_t i = 0; i < images; ++i) {
       const auto& eye = sources[i];
       const auto& target = targets[i];
-      if (!eye.texture || eye.size.width != target.width || eye.size.height != target.height) return false;
+      if (!eye.texture || ((eye.size.width != target.width || eye.size.height != target.height) && region(i) < 0))
+        return false;
       // Lane O: an eye swapchain in the other channel order (R8G8B8A8_SRGB against Aurora's BGRA, as
       // GalaxyFrame's) can only be written by the sRGB draw, which writes any order; that includes the
       // menus' screen image (the left image of a pair), which the copy wrote before.
@@ -390,23 +473,42 @@ public:
       if (!texture) return false;
       active[i] = *texture;
     }
+    const auto blits = [&](uint32_t i) {
+      return SinkBlit() && sources[i].view != nullptr && *sources[i].view &&
+             (SinkMode() == Sink::Blit || active[i].GetFormat() != sources[i].format);
+    };
+    // Both eyes in one packed image: one pass draws both halves (the copies take each half on their own).
+    const bool packedPair = count == 2 && region(0) == 0 && region(1) > 0 && blits(0) && blits(1);
     for (uint32_t i = 0; i < images; ++i) {
       wgpu::TexelCopyTextureInfo source, destination;
       source.texture = *sources[i].texture;
       destination.texture = active[i];
+      const int32_t x = region(i);
       wgpu::Extent3D size{targets[i].width, targets[i].height, 1};
+      if (x >= 0) {
+        destination.origin = {static_cast<uint32_t>(x), 0, 0};
+        size.width = sources[i].size.width;
+      }
       // An eye rendered straight into its swapchain image (DirectTargets) needs no copy.
       if (source.texture.Get() == destination.texture.Get()) {
-      } else if (SinkBlit() && sources[i].view != nullptr && *sources[i].view &&
-                 (SinkMode() == Sink::Blit || active[i].GetFormat() != sources[i].format)) {
+      } else if (packedPair) {
+        if (i == 0) {
+          const wgpu::TextureView* views[2] = {sources[0].view, sources[1].view};
+          BlitPacked(encoder, views, 2, sources[0].size.width, targets[0].height, active[0]);
+        }
+      } else if (x >= 0 && blits(i)) {
+        const wgpu::TextureView* views[1] = {sources[i].view};
+        BlitPacked(encoder, views, 1, sources[i].size.width, targets[i].height, active[i]);
+      } else if (blits(i)) {
         Blit(encoder, *sources[i].view, active[i]);
       } else {
         encoder.CopyTextureToTexture(&source, &destination, &size);
       }
       if (StampEnabled() && frame.mode == AURORA_STEREO_FRAME_IMMERSIVE_REPLAY && i < count && count == 2 &&
-          targets[i].width >= 64 * kStampCell &&
+          size.width >= 64 * kStampCell &&
           targets[i].height >= kStampRows * kStampCell)
-        WriteStamp(encoder, active[i], active[i].GetFormat(), frame.displayTimeNanos, i, frame.scene[i]);
+        WriteStamp(encoder, active[i], active[i].GetFormat(), frame.displayTimeNanos, i, frame.scene[i],
+                   x >= 0 ? static_cast<uint32_t>(x) : 0);
     }
     encoded = true;
     return true;
@@ -415,10 +517,14 @@ public:
     std::lock_guard guard(mutex);
     if (!token || !encoded || token != frame.frameToken) return;
     std::array<void*, kMaxImages> textures{};
-    for (uint32_t i = 0; i < images; ++i) textures[i] = active[i].Get();
+    uint32_t released = 0;
+    // A packed image (KARTFRAME_STEREO_PACKED) is both eyes' target: its barrier once.
+    for (uint32_t i = 0; i < images; ++i)
+      if (std::find(textures.begin(), textures.begin() + released, active[i].Get()) == textures.begin() + released)
+        textures[released++] = active[i].Get();
     // Append the COLOR_ATTACHMENT_OPTIMAL release barriers to Dawn's queue,
     // flush them under its device guard, then allow the XR thread to release.
-    const bool success = api.release(webgpu::g_device.Get(), textures.data(), images) != 0;
+    const bool success = api.release(webgpu::g_device.Get(), textures.data(), released) != 0;
     const auto completed = token;
     token = 0; encoded = false; claimed = false;
     submittingRetained = frame.retained;
