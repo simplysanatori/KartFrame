@@ -240,3 +240,15 @@ and up to 30 s for the file, then TERM, then KILL, then a pkill on anything writ
 panels.mkv. The log says "recorder stopped" or "recorder was never started"; a leftover
 panels.mkv.part is logged with its size and left for the owner. frame/test-wrapper-recorder.sh checks
 the four paths with a fake game and a fake framecorder (about 45 s).
+
+## Lane AH (the held item in the hand)
+From iChris4's Wiicompiled_VR fork: in the first-person cockpit the inventory item (triples as copies, grow in,
+shrink away, the golden mushroom squeezed on each use) is drawn in one hand, in the cockpit pass of each eye.
+Config `[vr] cockpit_item_hand = "left"|"right"|"off"` (default right) and `cockpit_item_size` (metres across,
+0.05-0.60, default 0.2), read by mkw_vr_first_person.cpp at start-up and at every race start (not in
+runtime_config.h); env KARTFRAME_COCKPIT_ITEM_HAND / KARTFRAME_COCKPIT_ITEM_SIZE override them, and
+KARTFRAME_COCKPIT_ITEM_TEST=<id>[:<count>] (tests) shows that item while the inventory is empty (PAL inventory
+ids: 0 green shell, 1 red shell, 2 banana, 4 mushroom, 5 triple mushroom, 10 golden mushroom, 16-18 triple shells
+and bananas; count 1-3). The models come from
+the disc's Race/Common.szs at run time (log: "cockpit item: Race/Common.szs (N bytes) parsed in X ms").
+`mkw_cockpit_item_data_tests <path to Common.szs>` audits all 15 models by hand. Results: frame/perf/LANE_AH.md.

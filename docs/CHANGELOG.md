@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Both eyes of a set now share one swapchain image by default (`KARTFRAME_STEREO_PACKED=1`, set by the launch wrapper; the game itself still defaults to off when run without it). In headset session 21 this was clean in a race with the end lock and also without it. `KARTFRAME_STEREO_PACKED=0` in `session.env` goes back to one swapchain per eye. Clean in one session each; the long A B A B comparison is pending.
+- First person: the item you hold is drawn in your hand (right by default; `[vr] cockpit_item_hand = "left"|"right"|"off"`, `cockpit_item_size` in metres, default 0.2), ported from iChris4's Wiicompiled_VR fork; the models come from your own disc at run time. Mock-tested only; the hand offset was tuned on Quest controllers.
 - `frame/tools/phase.py` no longer stops on XRF lines with another log line glued on after `t=`.
 
 ## 0.9.0-alpha.1 (October 2026), pre-release
