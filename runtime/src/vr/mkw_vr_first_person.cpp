@@ -3,6 +3,9 @@
 #include "vr/mkw_vr_first_person.h"
 #include "vr/hand_workshop.h"
 
+#include "aurora/aurora.h"
+#include "hle/dvd_vr_asset.h"
+
 #include "gx_native_wheel.h"
 #include "hle_stubs.h"
 #include "vr/body_ik.h"
@@ -19,9 +22,13 @@
 #include "vr/openxr_driving.h"
 
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 extern "C" void func_8006FA50(CpuContext* context);
@@ -332,6 +339,8 @@ struct FirstPersonState {
     std::array<float, 3> race_camera_world{};
     bool race_camera_world_valid = false;
     detail::LocalPlayerKartRead player_kart{};
+    HeldItem held_item{};
+    uint64_t race_generation = 0;
     // Armed by the draw boundary, consumed by the frame seal.
     bool armed = false;
     uint64_t armed_frame = 0;
@@ -1323,6 +1332,105 @@ void MkwVRFirstPersonApplyConfiguredSettings() noexcept {
     }
 }
 
+// The held item (from iChris4's Wiicompiled_VR fork). Its two settings are [vr] keys that
+// runtime_config.h does not know (that header is included by every translated file), read here.
+namespace {
+std::atomic<uint8_t> g_item_hand{1};
+std::atomic<float> g_item_size{0.2f};
+std::once_flag g_item_settings_once;
+
+std::string ReadVrConfigText(const char* key) {
+    try {
+        std::ifstream file(RuntimeConfigFile::ResolveConfigPath(), std::ios::binary);
+        if (!file) return {};
+        const auto document = toml::parse(file, "Config.toml");
+        if (auto text = RuntimeConfigFile::FindConfigValue<std::string>(document, "vr", key)) return *text;
+        if (auto number = RuntimeConfigFile::FindConfigFloat(document, "vr", key)) {
+            std::ostringstream out;
+            out << *number;
+            return out.str();
+        }
+    } catch (const std::exception&) {
+    }
+    return {};
+}
+
+void RefreshCockpitItemSettings() noexcept {
+    const char* hand_env = std::getenv("KARTFRAME_COCKPIT_ITEM_HAND");
+    const char* size_env = std::getenv("KARTFRAME_COCKPIT_ITEM_SIZE");
+    const std::string hand = hand_env != nullptr && *hand_env ? std::string(hand_env)
+                                                              : ReadVrConfigText("cockpit_item_hand");
+    const std::string size_text = size_env != nullptr && *size_env ? std::string(size_env)
+                                                                   : ReadVrConfigText("cockpit_item_size");
+    const uint8_t hand_value = hand == "left" ? 0 : hand == "off" ? 2 : 1;
+    float size = 0.2f;
+    if (!size_text.empty()) {
+        char* end = nullptr;
+        const float parsed = std::strtof(size_text.c_str(), &end);
+        if (end != size_text.c_str() && parsed == parsed) size = std::clamp(parsed, 0.05f, 0.60f);
+    }
+    const bool changed = g_item_hand.exchange(hand_value) != hand_value | g_item_size.exchange(size) != size;
+    static bool logged = false;
+    if (changed || !logged) {
+        logged = true;
+        RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] cockpit item: hand "
+                               << (hand_value == 0 ? "left" : hand_value == 1 ? "right" : "off") << ", size "
+                               << size << " m" << std::endl;
+    }
+}
+
+// KARTFRAME_COCKPIT_ITEM_TEST=<id>[:<count>] (tests only): shows that item while the inventory is empty.
+HeldItem TestHeldItem(uint64_t race_generation) noexcept {
+    static const char* text = std::getenv("KARTFRAME_COCKPIT_ITEM_TEST");
+    HeldItem item{};
+    item.race_generation = race_generation;
+    if (text == nullptr || *text == '\0') return item;
+    char* end = nullptr;
+    const long id = std::strtol(text, &end, 0);
+    const long count = end != nullptr && *end == ':' ? std::strtol(end + 1, nullptr, 0) : 1;
+    if (id < 0 || id > 0x12 || count < 1 || count > 3) return item;
+    item.id = static_cast<uint8_t>(id);
+    item.count = static_cast<uint8_t>(count);
+    item.valid = true;
+    return item;
+}
+
+// Race/Common.szs from the user's extracted disc, once, when the cockpit first shows: the bytes are
+// read here (one file read) and parsed by Aurora on a thread of its own, so the race does not wait.
+void LoadItemArchiveOnce() noexcept {
+    static bool attempted = false;
+    if (attempted || g_item_hand.load(std::memory_order_relaxed) == 2) return;
+    attempted = true;
+    auto archive = DVDReadVrAsset("/Race/Common.szs");
+    if (archive.empty()) {
+        RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] cockpit item: /Race/Common.szs not readable; no held item" << std::endl;
+        return;
+    }
+    try {
+        std::thread([bytes = std::move(archive)] {
+            const auto start = std::chrono::steady_clock::now();
+            aurora_set_cockpit_item_archive(bytes.data(), static_cast<uint32_t>(bytes.size()));
+            const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] cockpit item: Race/Common.szs (" << bytes.size()
+                                   << " bytes) parsed in " << ms << " ms" << std::endl;
+        }).detach();
+    } catch (const std::exception&) {
+    }
+}
+
+// Under g_mutex, at the race draw boundary of a cockpit frame.
+void ReadHeldItemLocked(uint32_t local_racer) noexcept {
+    std::call_once(g_item_settings_once, RefreshCockpitItemSettings);
+    if (g_item_hand.load(std::memory_order_relaxed) == 2) return;
+    LoadItemArchiveOnce();
+    g_state.held_item = detail::ReadHeldItem<Memory>(local_racer, g_state.race_generation);
+    if (!g_state.held_item.valid && !g_state.held_item.tethered) {
+        const HeldItem test = TestHeldItem(g_state.race_generation);
+        if (test.valid) g_state.held_item = test;
+    }
+}
+} // namespace
+
 void MkwVRFirstPersonReset() noexcept {
     std::lock_guard lock(g_mutex);
     ResetCharacterBodyLocked();
@@ -1336,6 +1444,10 @@ void MkwVRFirstPersonReset() noexcept {
     g_state.camera_address = 0;
     g_state.race_camera_world_valid = false;
     g_state.player_kart = {};
+    g_state.held_item = {};
+    ++g_state.race_generation;
+    g_state.held_item.race_generation = g_state.race_generation;
+    RefreshCockpitItemSettings();
     g_state.anchor = {};
     g_state.hold_frames = 0;
     g_state.ever_valid_this_race = false;
@@ -1363,6 +1475,8 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
     // twice or discard the steering mesh prepared for this same frame.
     if (g_state.armed && g_state.armed_frame == guest_frame_index &&
         g_state.camera_address == race_camera_address) return;
+    g_state.held_item = {};
+    g_state.held_item.race_generation = g_state.race_generation;
     g_state.camera_address = race_camera_address;
     Mtx34 race_view{};
     g_state.race_camera_world_valid = race_camera_address != 0 &&
@@ -1411,6 +1525,10 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
         g_state.hold_frames = 0;
     }
     g_state.player_kart = player;
+    if (player.failed_step == nullptr && g_state.mode == CameraMode::FirstPerson &&
+        g_state.seat == FirstPersonSeat::Cockpit) {
+        ReadHeldItemLocked(player.player_index);
+    }
     g_state.armed = true;
     g_state.armed_frame = guest_frame_index;
     g_state.armed_view_valid = ReadSceneViewMatrix(g_state.armed_view);
@@ -1532,6 +1650,19 @@ void MkwVRSetCameraMode(CameraMode mode) noexcept {
 FirstPersonAnchor MkwVRFirstPersonGetAnchor() noexcept {
     std::lock_guard lock(g_mutex);
     return g_state.anchor;
+}
+
+HeldItem MkwVRFirstPersonGetHeldItem() noexcept {
+    std::lock_guard lock(g_mutex);
+    return g_state.held_item;
+}
+
+CockpitItemSettings MkwVRCockpitItemSettings() noexcept {
+    std::call_once(g_item_settings_once, RefreshCockpitItemSettings);
+    CockpitItemSettings settings;
+    settings.hand = g_item_hand.load(std::memory_order_relaxed);
+    settings.size = g_item_size.load(std::memory_order_relaxed);
+    return settings;
 }
 
 bool MkwVRFirstPersonGetRaceCameraPosition(float out[3]) noexcept {

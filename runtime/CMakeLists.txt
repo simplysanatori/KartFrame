@@ -510,6 +510,16 @@ target_include_directories(mkw_vr_player_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR
 target_compile_features(mkw_vr_player_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_vr_player_tests COMMAND mkw_vr_player_tests)
 
+# The held item (iChris4's Wiicompiled_VR fork): the inventory read, and the item model parser on
+# synthetic input (pass a Race/Common.szs path by hand to audit the real models; never committed).
+add_executable(mkw_vr_item_tests "${CMAKE_CURRENT_LIST_DIR}/tests/vr_item_tests.cpp")
+target_include_directories(mkw_vr_item_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(mkw_vr_item_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_vr_item_tests COMMAND mkw_vr_item_tests)
+add_executable(mkw_cockpit_item_data_tests "${MKW_AURORA_DIR}/tests/cockpit_item_data_test.cpp")
+target_compile_features(mkw_cockpit_item_data_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_cockpit_item_data_tests COMMAND mkw_cockpit_item_data_tests)
+
 add_executable(mkw_vr_policy_tests tests/vr_policy_tests.cpp src/vr/mkw_vr_policy.cpp)
 target_include_directories(mkw_vr_policy_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(mkw_vr_policy_tests PRIVATE cxx_std_17)

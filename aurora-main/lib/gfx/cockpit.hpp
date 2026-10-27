@@ -7,6 +7,7 @@
 // and hand steering".
 #pragma once
 #include "common.hpp"
+#include "cockpit_item.hpp"
 #include "../webgpu/gpu.hpp"
 #include <array>
 #include <atomic>
@@ -191,7 +192,9 @@ inline void build_geometry(const AuroraCockpit& cockpit, std::vector<Vertex>& ve
   }
   std::array<std::shared_ptr<const HandMesh>,2> current;
   { std::lock_guard lock(meshMutex);current=meshes; }
-  for(int side=0;side<2;++side) if(cockpit.hands[side].tracked) {
+  // A hand the game's character model draws (body IK) gets none here; what it
+  // carries is drawn all the same (cockpit_item::render).
+  for(int side=0;side<2;++side) if(cockpit.hands[side].tracked && !cockpit.hands[side].characterHand) {
     const auto& hand=cockpit.hands[side];
     if(hand.calibrationMarker) {
       const V color=hand.calibrationCaptured?V{0.15f,1.0f,0.25f}:V{0.08f,0.45f,1.0f};
@@ -205,6 +208,12 @@ inline void build_geometry(const AuroraCockpit& cockpit, std::vector<Vertex>& ve
 }
 inline std::vector<Vertex> geometry(const AuroraCockpit& cockpit) {
   std::vector<Vertex> result;build_geometry(cockpit,result);return result;
+}
+// A located hand that may carry the held item (iChris4's rule). With the
+// character body drawing the hands, the item can be all the overlay draws, and
+// cockpit_item::render keeps its models uploading ahead of the first roulette.
+inline bool carries_hand(const AuroraCockpit& cockpit) {
+  return cockpit.hands[0].tracked || cockpit.hands[1].tracked;
 }
 inline std::atomic<uint64_t> meshRevision{1};
 inline std::vector<Vertex> frameVertices;
@@ -221,7 +230,7 @@ inline bool pipelineCalibration=false;
 inline wgpu::TextureFormat pipelineFormat{}, pipelineDepthFormat{};
 inline std::array<wgpu::Buffer,2> vertexBuffers;
 inline std::array<uint64_t,2> vertexCapacity{};
-inline void shutdown() { pipeline=nullptr;pipelineSamples=0;vertexBuffers={};vertexCapacity={};cachedMeshRevision=0;frameVertices.clear(); }
+inline void shutdown() { pipeline=nullptr;pipelineSamples=0;vertexBuffers={};vertexCapacity={};cachedMeshRevision=0;frameVertices.clear();cockpit_item::shutdown(); }
 inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint32_t eye,SceneDepth sceneDepth={},
                    const wgpu::RenderPassEncoder* existingPass=nullptr) {
   if(!frame.cockpit.active || !sceneDepth.valid) return;
@@ -268,7 +277,7 @@ inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint
     cachedCockpit=frame.cockpit;cachedMeshRevision=revision;
   }
   const auto& vertices=frameVertices;
-  if(vertices.empty()) return;
+  if(vertices.empty() && !carries_hand(frame.cockpit)) return;
   struct ClipVertex { float p[4]; V color; };
   static std::vector<ClipVertex> clip;
   clip.resize(vertices.size());
@@ -282,14 +291,14 @@ inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint
       std::clamp(z,0.0f,std::max(-p[2],0.0f)),-p[2]},vertices[i].color};
   }
   const uint64_t bytes=clip.size()*sizeof(ClipVertex);
-  if (!vertexBuffers[eye] || vertexCapacity[eye]<bytes) {
+  if (bytes && (!vertexBuffers[eye] || vertexCapacity[eye]<bytes)) {
     vertexCapacity[eye]=(bytes+65535)&~uint64_t(65535);
     const wgpu::BufferDescriptor bd{.label="VR cockpit vertices",.usage=wgpu::BufferUsage::Vertex|wgpu::BufferUsage::CopyDst,
       .size=vertexCapacity[eye]};
     vertexBuffers[eye]=g_device.CreateBuffer(&bd);
   }
   auto& buffer=vertexBuffers[eye];
-  g_queue.WriteBuffer(buffer,0,clip.data(),bytes);
+  if(bytes) g_queue.WriteBuffer(buffer,0,clip.data(),bytes);
   const wgpu::RenderPassColorAttachment attachment{.view=target.colorView,.resolveTarget=target.resolveView,
     .loadOp=wgpu::LoadOp::Load,.storeOp=wgpu::StoreOp::Store};
   const wgpu::RenderPassDepthStencilAttachment depth{.view=target.depthView,.depthLoadOp=wgpu::LoadOp::Load,
@@ -302,7 +311,9 @@ inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint
   pass.SetScissorRect(0,0,target.size.width,target.size.height);
   // Mark only depth-visible samples; later virtual-screen draws test for zero.
   pass.SetStencilReference(1);
-  pass.SetPipeline(pipeline);pass.SetVertexBuffer(0,buffer);pass.Draw(clip.size());
+  if(bytes) { pass.SetPipeline(pipeline);pass.SetVertexBuffer(0,buffer);pass.Draw(clip.size()); }
+  // The held item, in the same pass against the same depth (iChris4's Wiicompiled_VR fork).
+  cockpit_item::render(pass,frame,eye,sceneDepth.z,sceneDepth.constant);
   pass.SetStencilReference(0);
   if(!existingPass) pass.End();
 }

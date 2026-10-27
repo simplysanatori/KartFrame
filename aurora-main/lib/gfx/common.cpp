@@ -3602,3 +3602,7 @@ void aurora_set_vr_hand_mesh(uint32_t hand, const AuroraVRHandVertex* vertices, 
   meshes[hand] = std::move(mesh);
   ++meshRevision;
 }
+
+void aurora_set_cockpit_item_archive(const void* bytes, uint32_t size) {
+  aurora::gfx::cockpit_item::set_archive(bytes, size);
+}

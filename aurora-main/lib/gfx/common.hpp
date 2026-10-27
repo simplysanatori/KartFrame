@@ -329,6 +329,8 @@ struct StereoReplayFrame {
   Mat3x4<float> currentAnchor{};
   // VR hands and synthetic wheel, drawn per eye after the world (gfx/cockpit.hpp).
   AuroraCockpit cockpit{};
+  // The held item, drawn in a cockpit hand (gfx/cockpit_item.hpp).
+  AuroraCockpitItem cockpitItem{};
   // The immersive window (AuroraStereoFrame::window): each eye is masked to the
   // 2D layer's screen after its last draw (gfx/window_mask.hpp).
   bool window = false;
