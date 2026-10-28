@@ -91,6 +91,8 @@ The work since the first headset session, in the order it mattered:
 
    The installer unpacks the program into `~/Games/KartFrame/app`. It adds **KartFrame** to your Steam library as a non-Steam shortcut, or updates the entry if it is there. It converts the Frame's controller models from SteamVR's own files. The script talks to Steam through its local debugging port, which SteamOS has on by default.
 
+   The installer also gives the entry KartFrame's library art (portrait, wide, hero, logo and icon, from `frame/art`) and asks Steam to use the icon in the dock. If you have a SteamGridDB API key (set `SGDB_API_KEY`) and ffmpeg is installed, the portrait, wide and hero are made from SteamGridDB's Mario Kart Wii key art instead (downloaded, never shipped; credits in `frame/art/CREDITS.md`). Art it replaces is saved under `~/.local/share/icon-backups`. `--no-art` skips all of it, and `--art DIR` installs your own images. If Steam does not take the dock icon while it runs, stop Steam and run `python3 frame/art/art.py --vdf ~/.local/share/Steam/userdata/<id>/config/shortcuts.vdf --appid <appid>`.
+
 3. Build the game from your disc, once:
 
    ```sh

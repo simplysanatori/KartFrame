@@ -12,7 +12,7 @@
 // folder the player chose, ready to zip and attach.
 namespace log_export {
 
-inline constexpr std::string_view kExportFolderPrefix = "WiiCompiled-logs-";
+inline constexpr std::string_view kExportFolderPrefix = "KartFrame-logs-";
 
 struct Result {
     // The folder created for this export; empty when it could not be created.
@@ -25,7 +25,7 @@ struct Result {
     bool Succeeded() const { return !destination.empty() && files_failed == 0 && error.empty(); }
 };
 
-// Creates "WiiCompiled-logs-YYYYMMDD-HHMMSS" (local time, with a numeric suffix
+// Creates "KartFrame-logs-YYYYMMDD-HHMMSS" (local time, with a numeric suffix
 // if that name exists) inside `parent` and copies into it:
 //   Logs/            the whole run-log tree, one folder per run, current run included
 //   Config.toml      the player's configuration

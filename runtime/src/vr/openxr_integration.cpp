@@ -849,7 +849,7 @@ public:
 
         OpenXRConfig config{};
         config.application_name = aurora_config.appName != nullptr ? aurora_config.appName
-                                                                    : "WiiCompiled";
+                                                                    : "KartFrame";
         config.engine_name = "Aurora";
         config.resolution_scale = RuntimeConfigFile::VrRenderScale();
         // KARTFRAME_RENDER_SCALE (lane AG): one launch's render_scale (session.env), same range as the config's.
