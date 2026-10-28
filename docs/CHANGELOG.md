@@ -2,45 +2,41 @@
 
 ## 1.0.0 (October 2026)
 
-The first full release of KartFrame, Mario Kart Wii VR built as a native Arm64 Linux program for the Valve Steam Frame. Time Trial and Grand Prix run at the game's full 60 frames a second, at 1728 pixels per eye and 90 Hz with the game's own frame interpolation, and the right-eye double image is gone. Under Lepton the Quest APK had no interpolation until I rebuilt it, menus at 37 to 45 frames a second and stalls above 1728 per eye; the [release notes](RELEASE_NOTES_1.0.0.md) have the comparison.
+The first release of KartFrame: Mario Kart Wii VR as a native Arm64 Linux program for the Valve Steam Frame. If you have been playing the Quest APK through Lepton, this is the same game without the Android layer underneath, and it runs better.
 
 ### The game on the Frame
 
 - A native Arm64 Linux build that runs in the Frame's own SteamVR through OpenXR, on SteamVR's Vulkan device. No Android layer, no Lepton, no APK re-signing, no adb.
+- 90 Hz at 1728 pixels per eye, filled by the game's own frame interpolation from its 60 frames a second.
+- The game's graphics work runs on its own thread, and both eyes of a refresh go to SteamVR in one image.
 - The Frame controller layout in code, with no SteamVR binding file.
 - A first run that builds the game from your own disc on the Frame, and one Steam shortcut that starts it directly.
 
-### Fixed
+### What is better than running the APK through Lepton
 
-- The right-eye double image in races. I put both eyes of a refresh in one swapchain image, so SteamVR can no longer pair a right eye from one refresh with a left eye from another (`KARTFRAME_STEREO_PACKED=1`).
-- Grand Prix speed. I moved the game's graphics work to its own thread (the GX thread) and made the frame worker hold the renderer lock only for a set's setup (`KARTFRAME_WORKER_LOCK=narrow`). Grand Prix holds 60 frames a second, where it ran at 48 to 54.
-- In menus the controllers and the pointer ray are drawn in front of the menu screen, in 3D, not behind it.
+- Under Lepton the Quest build showed its 60 game frames at 72 Hz with judder, or blurred at 120 Hz. The Android build leaves the game's frame interpolation out. Here the interpolation runs at 90 Hz, and the game holds a full 60 frames a second in Time Trial and Grand Prix.
+- Grand Prix holds 60 because the game's graphics work runs on its own CPU core.
+- Under Lepton the image ghosted and doubled when I turned my head. Here both eyes of a refresh go to SteamVR in one image, and the picture is clean.
+- Menus ran at 37 to 45 frames a second under Lepton. Here they run at the display rate.
+- Under Lepton anything above 1728 per eye brought late frames and stalls of 30 to 50 ms, so I played at 1382 to 1728. Here 1728 is the default, at 90 Hz.
+- The chip does less work for the same game: native code, no Android system running underneath it. Battery life should be better for it.
+- Nothing to work around at launch: no adb, no launcher taps, no re-signed APK or patched dex. It is one shortcut in Steam.
+- The controls are made for the Frame controllers, so every button does what it should. Under Lepton I had whatever SteamVR's remap of the Vive-wand bindings allowed.
 
 ### Added
 
-- 90 Hz at 1728 per eye with the game's own frame interpolation, and a 33 ms interpolation window (`KARTFRAME_INTERP_MAX_MS`): one missed game frame glides instead of stepping.
-- Rumble on the Frame controllers: the game's bumps and hits shake both of them (`KARTFRAME_RUMBLE`, strength 0.7, `0` turns it off).
-- Refresh rate and eye size settings: `[vr] refresh_rate` (90 or 120) and `render_scale`, or `KARTFRAME_REFRESH_HZ`, `KARTFRAME_RENDER_SCALE` and `KARTFRAME_EYE_PX` for one launch. The wrapper writes the refresh rate into SteamVR's per-app settings at every launch.
-- Logs: CPU use per second (`KARTFRAME_CPULOG=1`), `thermal.tsv` in each session folder, and a `machine` line in `report.txt` with other processes' CPU use. The launch log warns when compilers or other builds are running.
-- Library art: Mario Kart Wii key art from SteamGridDB (downloaded at install, never shipped), a plain KartFrame logo and a dock icon. `--art DIR` installs your own images, `--no-art` skips them.
-- The name KartFrame in the logs, the settings panel, the window title and the installer.
-- Features from iChris4's Wiicompiled_VR are in too: the item in your hand, swing to throw, the 3D ghost, the reflection fix.
-
-### Changed defaults
-
-- 90 Hz, was 120. New installs get `refresh_rate = 90`; an older `Config.toml` keeps its 120 until you change it.
-- GX thread on, narrow renderer lock, both eyes in one swapchain, 33 ms interpolation window.
-- Controllers in front of the menu screen (`KARTFRAME_MENU_CONTROLLERS=eyes`).
-- The runtime kit was rebuilt: after updating, run `setup.sh` again (about 6 minutes). Saves and settings stay where they are.
+- Rumble on the Frame controllers. The game's bumps and hits shake both of them. `KARTFRAME_RUMBLE=0` turns it off.
+- Refresh rate and eye size are settings: `[vr] refresh_rate` and `render_scale` in `Config.toml`.
+- A log of CPU use and temperatures every second, in each session folder.
+- Mario Kart Wii library art for the Steam entry, and the KartFrame name throughout.
+- Features from Wiicompiled VR are in too: the item in your hand, swing to throw, the 3D ghost, the reflection fix.
 
 ### Known issues
 
-- Opening KartFrame's own settings panel over a running race slows the race (about 84 frames a second, some late frames) until you close it. The SteamVR dashboard costs nothing.
-- 120 Hz at 1728 per eye needs about 1 ms more GPU time per refresh than the Frame has, so SteamVR skips frames in bursts. It stays a switch (`KARTFRAME_REFRESH_HZ=120`).
-- The heaviest sections of a course dip a little, to about 58 frames a second.
-- Builds or other heavy work on the Frame while you play make the game stutter.
-- One swapchain per eye (`KARTFRAME_STEREO_PACKED=0`) is retired: it brings the right-eye double image back.
-- Blooper ink and the black of a respawn do not cover the whole view. The pointer's dot does not show on the 2D menu screen; the ray does.
+- The VR menu over a running race slows the race until you close it.
+- 120 Hz is there if you want to try it, but at 1728 per eye the GPU runs out of time and SteamVR skips frames.
+- The heaviest parts of a few courses dip a little below 60.
+- Anything else heavy running on the Frame while you play (a compile, a download) makes it stutter.
 
 ### Credits
 
