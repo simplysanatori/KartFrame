@@ -215,6 +215,12 @@ struct RenderPass {
   // Deliberately not set for GXCopyTex: a mid-frame copy clear establishes the
   // background the rest of the frame draws over, and an eye still needs it.
   bool postCopyClear = false;
+  // The EFB clear of the GX copy this pass continues from, whether an attachment clear of the whole target or a
+  // scissored clear draw at the pass's start: what it clears (colour means RGB here) and the copied rectangle it
+  // covers. Mario Kart Wii's Time Trial ghost is erased this way, by a scissored clear (link_composite_source).
+  bool copyClearColor = false;
+  bool copyClearDepth = false;
+  ClipRect copyClearRect{};
   bool snapshotColorResolveSource = false;
   bool efbTarget = false;
   // Mario Kart Wii's Time Trial ghost, drawn alone into this pass and copied out (link_composite_source): an eye
@@ -813,6 +819,9 @@ void resolve_pass(TextureHandle texture, ClipRect rect, bool clearColor, bool cl
   };
   push_render_pass(std::move(newPass));
   ++g_currentRenderPass;
+  g_renderPasses[g_currentRenderPass].copyClearColor = clearColor;
+  g_renderPasses[g_currentRenderPass].copyClearDepth = clearDepth;
+  g_renderPasses[g_currentRenderPass].copyClearRect = rect;
 
   if ((!useAttachmentColorClear && (clearColor || clearAlpha)) || (!useAttachmentDepthClear && clearDepth)) {
     // GX copy clears cover the copied EFB rectangle, not always the whole target, so use a scissored
@@ -1091,12 +1100,102 @@ static bool pass_has_draws(const RenderPass& pass) noexcept {
   return std::ranges::any_of(pass.commands, [](const Command& c) { return c.type == CommandType::Draw; });
 }
 
+// KARTFRAME_PASS_DUMP=<n> (diagnostics, default off): the first n frames with a composite of a fresh depth copy log
+// every pass recorded so far (one line each): its target, clears, the clear of the copy it continues from, its draws
+// by kind, the clear draws and the composites in it, and the copy it ends with. "*" marks the composite being linked.
+static uint32_t pass_dump_frames() noexcept {
+  static const uint32_t frames = [] {
+    const char* env = std::getenv("KARTFRAME_PASS_DUMP");
+    return env != nullptr ? static_cast<uint32_t>(std::max(0, std::atoi(env))) : 0u;
+  }();
+  return frames;
+}
+
+static void dump_pass_layout(const gx::DrawData& composite) noexcept {
+  static std::atomic_uint32_t dumped{0};
+  static uint32_t lastFrame = UINT32_MAX;
+  if (pass_dump_frames() == 0 || lastFrame == g_frameIndex) {
+    return;
+  }
+  if (dumped.fetch_add(1, std::memory_order_relaxed) >= pass_dump_frames()) {
+    return;
+  }
+  lastFrame = g_frameIndex;
+  Log.info("Pass dump: frame {}, {} passes so far, composite in pass {} samples depth copy {} (tex0 {}x{}{}, {} "
+           "vertices, dstAlpha {})",
+           g_frameIndex, g_currentRenderPass + 1, g_currentRenderPass,
+           static_cast<const void*>(composite.uniformReplayLayout.compositeDepthCopy),
+           (composite.quadSignature >> 10) & 0x7ff, (composite.quadSignature >> 21) & 0x7ff,
+           ((composite.quadSignature >> 32) & 1) != 0 ? " EFB copy" : "", composite.vtxCount, composite.dstAlpha);
+  for (u32 p = 0; p <= g_currentRenderPass && p < g_renderPasses.size(); ++p) {
+    const RenderPass& pass = g_renderPasses[p];
+    size_t persp = 0, flat = 0, efbFx = 0, other = 0;
+    std::string clears;
+    std::string composites;
+    std::string firstViewport;
+    for (const auto& command : pass.commands) {
+      if (command.type == CommandType::SetViewport && firstViewport.empty()) {
+        const auto& vp = command.data.setViewport;
+        firstViewport = fmt::format(" vp {:.0f},{:.0f} {:.0f}x{:.0f} z {:.3f}..{:.3f}", vp.left, vp.top, vp.width,
+                                    vp.height, vp.znear, vp.zfar);
+      }
+      if (command.type != CommandType::Draw) {
+        continue;
+      }
+      const auto& draw = command.data.draw;
+      if (draw.type == ShaderType::Clear) {
+        const auto& c = draw.clear;
+        clears += fmt::format(" [clear#{} {}{} {},{} {}x{}]", persp + flat + efbFx + other, c.copyClear ? "copy" : "game",
+                              c.useScissor ? " scissor" : " full", c.scissor.x, c.scissor.y, c.scissor.width,
+                              c.scissor.height);
+        ++other;
+        continue;
+      }
+      if (draw.type != ShaderType::GX) {
+        ++other;
+        continue;
+      }
+      const auto& layout = draw.gx.uniformReplayLayout;
+      if (layout.compositeDepthCopy != nullptr) {
+        composites += fmt::format(" [composite#{} of {}{}]", persp + flat + efbFx + other,
+                                  static_cast<const void*>(layout.compositeDepthCopy),
+                                  p == g_currentRenderPass ? " (earlier)" : "");
+      }
+      if (layout.perspective) {
+        ++persp;
+      } else if (layout.nativeEfbEffect) {
+        ++efbFx;
+      } else {
+        ++flat;
+      }
+    }
+    if (p == g_currentRenderPass) {
+      composites += fmt::format(" [*composite#{}]", persp + flat + efbFx + other);
+    }
+    Log.info("Pass dump: {} {} {}x{} att-clear c{} d{}{} copy-clear c{} d{} {},{} {}x{}{}; draws 3D {} 2D {} efb-fx {} "
+             "other {}{}{}{}{}",
+             p, pass.efbTarget ? "efb" : "off", pass.targetSize.width, pass.targetSize.height, pass.clearColor ? 1 : 0,
+             pass.clearDepth ? 1 : 0, pass.postCopyClear ? " post-disp-copy" : "", pass.copyClearColor ? 1 : 0,
+             pass.copyClearDepth ? 1 : 0, pass.copyClearRect.x, pass.copyClearRect.y, pass.copyClearRect.width,
+             pass.copyClearRect.height, firstViewport, persp, flat, efbFx, other, clears, composites,
+             pass.resolveTarget
+                 ? fmt::format(" -> copy {} fmt {} rect {},{} {}x{} tex {}x{}{}",
+                               static_cast<const void*>(pass.resolveTarget.get()), static_cast<int>(pass.resolveFormat),
+                               pass.resolveRect.x, pass.resolveRect.y, pass.resolveRect.width,
+                               pass.resolveRect.height, pass.resolveTarget->size.width,
+                               pass.resolveTarget->size.height, pass.displayCopyResolve ? " display" : "")
+                 : std::string{},
+             pass.compositeSource ? " (ghost source)" : "");
+  }
+}
+
 // Runs as the composite is recorded (GX thread), so frames without one pay one pointer test per draw.
 static void link_composite_source(const gx::DrawData& composite) noexcept {
   const TextureRef* depthCopy = composite.uniformReplayLayout.compositeDepthCopy;
   if (g_stereoLocalPlayerCount > 1 || !has_current_render_pass() || !g_renderPasses[g_currentRenderPass].efbTarget) {
     return;
   }
+  dump_pass_layout(composite);
   static std::atomic_uint32_t rejectLogs{0};
   const auto reject = [](const char* why) noexcept {
     if (rejectLogs.fetch_add(1, std::memory_order_relaxed) < 4) {
@@ -1122,11 +1221,21 @@ static void link_composite_source(const gx::DrawData& composite) noexcept {
       return;
     }
     // The picture must be erased (colour and depth) before the composite: then the composite is the only way its
-    // draws reach the image, and drawing them there instead loses nothing.
+    // draws reach the image, and drawing them there instead loses nothing. Mario Kart Wii erases it with the clear of
+    // its colour copy, which covers the copied rectangle but not the whole (wider) EFB target, so it is recorded as a
+    // scissored clear draw rather than an attachment clear (lane AM's pass dump): either counts when it covers the
+    // copied rectangle.
+    const ClipRect& copied = g_renderPasses[p].resolveRect;
+    const auto covers = [&copied](const ClipRect& r) noexcept {
+      return r.x <= copied.x && r.y <= copied.y && r.x + r.width >= copied.x + copied.width &&
+             r.y + r.height >= copied.y + copied.height;
+    };
     bool erased = false;
     for (size_t q = p + 1; q <= g_currentRenderPass && !erased; ++q) {
-      erased = g_renderPasses[q].efbTarget && g_renderPasses[q].clearColor && g_renderPasses[q].clearDepth &&
-               !g_renderPasses[q].postCopyClear;
+      const RenderPass& later = g_renderPasses[q];
+      erased = later.efbTarget && !later.postCopyClear &&
+               ((later.clearColor && later.clearDepth) ||
+                (later.copyClearColor && later.copyClearDepth && covers(later.copyClearRect)));
     }
     if (!erased) {
       return reject("its picture is not cleared before the composite");
