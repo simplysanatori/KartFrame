@@ -37,7 +37,8 @@
 #                           off = today's old look (they sit behind the screen); projected = the screen drawn into the
 #                           room layer (softer text). See frame/perf/LANE_AF.md
 #   KARTFRAME_VRTIMING=0    no compositor timing log
-#   KARTFRAME_THERMLOG=0    no thermal.tsv (hottest thermal zone, CPU and GPU clocks once a second)
+#   KARTFRAME_THERMLOG=0    no thermal.tsv (hottest thermal zone, CPU and GPU clocks, CPU load: the game, other
+#                           processes, runnable threads; once a second)
 #   KARTFRAME_SESSION_ENV_ONCE=1   (inside session.env) delete session.env after this launch
 #   KARTFRAME_KEEP_SESSIONS number of session folders kept (default 30)
 # Test hooks: KARTFRAME_VRCMD, KARTFRAME_STEAMVR_DIR, KARTFRAME_VRSETTINGS, KARTFRAME_VRTIMING_PY,
@@ -197,16 +198,32 @@ else
     log "no vrtiming.log (disabled, or vrtiming.py / libopenvr_api.so missing)"
 fi
 
+# Other work on the game's CPUs (lane AO): session 26 stuttered every few seconds because two container
+# builds compiled on the same CPUs through the whole launch (the game's threads waited 10-12 ms for a CPU
+# in each slow frame; 0.2-0.7 ms in session 25). Compilers running now are named here; thermal.tsv
+# below has the CPU load per second, and the report's last lines sum it up.
+BUILDS=$(pgrep -x 'cc1|cc1plus|cc1obj|lto1|collect2|ld|ld.lld|ld.gold|clang|clang\+\+|rustc|ninja|make|cmake' -l 2> /dev/null \
+    | awk '{n[$2]++} END {for (k in n) printf "%s%s x%d", (s++ ? ", " : ""), k, n[k]}')
+[ -n "$BUILDS" ] && log "WARNING: build processes running now ($BUILDS): they share the game's CPUs; expect stutter until they finish"
+
 # Heat and clocks once a second (lane AJ): thermal.tsv = time, hottest zone (C) and its type, each CPU's
-# current clock (MHz, cpu0..), the GPU clock (MHz). Shell builtins only (no process per sample).
+# current clock (MHz, cpu0..), the GPU clock (MHz); then (lane AO) the load on the CPUs this wrapper may
+# use (its affinity, e.g. 3-7): busy CPUs, of them the game (process "kartframe", found once it runs),
+# the rest = other processes, and the machine's runnable threads (procs_running). Shell builtins only.
 THERM_PID=
 if [ "${KARTFRAME_THERMLOG:-1}" != 0 ]; then
     (
+        allowed=; while read -r k v; do [ "$k" = Cpus_allowed_list: ] && allowed=$v; done < /proc/self/status
+        declare -A mine=(); IFS=, read -r -a parts <<< "${allowed:-0-1023}"
+        for r in "${parts[@]}"; do a=${r%-*}; b=${r#*-}; for ((c = a; c <= b && c < 1024; c++)); do mine[cpu$c]=1; done; done
+        nmine=0; while read -r k _; do [ -n "${mine[$k]}" ] && nmine=$((nmine + 1)); done < /proc/stat
+        cpus100() { [ "$2" -gt 0 ] || { echo 0.00; return; }; local v=$(($1 * nmine * 100 / $2)); printf '%d.%02d' $((v / 100)) $((v % 100)); }
+        pbusy=; ptot=; pgame=; kfpid=
         zones=(/sys/class/thermal/thermal_zone*); types=()
         for z in "${zones[@]}"; do t=?; read -r t < "$z/type" 2> /dev/null; types+=("$t"); done
         cpus=(/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq)
         gpu=$(ls -d /sys/class/devfreq/*.gpu 2> /dev/null | head -1)
-        echo "# time hot_C zone_type MHz:${cpus[*]//[!0-9 ]/} gpu_MHz"
+        echo "# time hot_C zone_type MHz:${cpus[*]//[!0-9 ]/} gpu_MHz busy_cpus(of $nmine: ${allowed:-all}) game_cpus other_cpus runnable"
         while :; do
             hot=-999999; ht=?; i=0
             for z in "${zones[@]}"; do v=; read -r v < "$z/temp" 2> /dev/null
@@ -214,6 +231,21 @@ if [ "${KARTFRAME_THERMLOG:-1}" != 0 ]; then
             line="$EPOCHREALTIME $((hot / 1000)).$(((hot % 1000) / 100)) $ht"
             for c in "${cpus[@]}"; do v=0; read -r v < "$c" 2> /dev/null; line+=" $((v / 1000))"; done
             v=0; [ -n "$gpu" ] && read -r v < "$gpu/cur_freq" 2> /dev/null; line+=" $((v / 1000000))"
+            busy=0; tot=0; run=0
+            while read -r k u n sy idle io irq sirq st _; do
+                if [ -n "${mine[$k]}" ]; then b=$((u + n + sy + irq + sirq + st)); busy=$((busy + b)); tot=$((tot + b + idle + io))
+                elif [ "$k" = procs_running ]; then run=$u; fi
+            done < /proc/stat
+            if [ -z "$kfpid" ]; then
+                for d in /proc/[0-9]*; do c=; read -r c < "$d/comm" 2> /dev/null; [ "$c" = kartframe ] && kfpid=${d#/proc/}; done
+            fi
+            game=0; if [ -n "$kfpid" ] && read -r ps < "/proc/$kfpid/stat" 2> /dev/null; then
+                ps=${ps##*) }; f=($ps); game=$((f[11] + f[12])); fi
+            if [ -n "$ptot" ]; then dt=$((tot - ptot)); db=$((busy - pbusy)); dg=$((game - pgame)); [ "$dg" -lt 0 ] && dg=0
+                oth=$((db - dg)); [ "$oth" -lt 0 ] && oth=0
+                line+=" $(cpus100 "$db" "$dt") $(cpus100 "$dg" "$dt") $(cpus100 "$oth" "$dt") $run"
+            else line+=" - - - $run"; fi
+            pbusy=$busy; ptot=$tot; pgame=$game
             echo "$line"; sleep 1
         done
     ) > "$SESSION/thermal.tsv" 2> /dev/null &
@@ -311,6 +343,16 @@ if [ -f "$REPORT" ]; then
     python3 -I "$REPORT" "$@" > "$SESSION/report.txt" 2>&1 || log "session-report exited non-zero"
 else
     log "no session-report.py at $REPORT"
+fi
+# Machine load during the launch (lane AO), from thermal.tsv: other processes on the game's CPUs.
+if [ -s "$SESSION/thermal.tsv" ]; then
+    awk '!/^#/ && NF >= 4 && $(NF - 1) != "-" { n++; o = $(NF - 1); r = $NF; g = $(NF - 2); so += o; sr += r; sg += g
+            if (o > mo) mo = o; if (r > mr) mr = r; if (o >= 1) heavy++
+            if (n == 1 || $2 > mh) mh = $2; sh += $2 }
+         END { if (!n) exit
+            printf "machine (thermal.tsv, %d s): other processes on the game'"'"'s CPUs mean %.2f max %.2f CPUs, %d s with 1 or more; game %.2f CPUs; runnable threads mean %.1f max %d; hottest zone mean %.1f max %.1f C\n", n, so / n, mo, heavy, sg / n, sr / n, mr, sh / n, mh
+            if (so / n >= 1) print "WARNING: other processes used a CPU or more of the game'"'"'s CPUs on average (builds?): stutter from run-queue waits is expected; see the hitch lines'"'"' runq_ms" }' \
+        "$SESSION/thermal.tsv" >> "$SESSION/report.txt" 2> /dev/null
 fi
 # Keep the newest sessions only.
 KEEP=${KARTFRAME_KEEP_SESSIONS:-30}
