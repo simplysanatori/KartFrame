@@ -1,27 +1,24 @@
 # KartFrame 1.0.0
 
-Mario Kart Wii in VR, running natively on the Valve Steam Frame. KartFrame is a fork of heurazy's Wiicompiled VR PLUS (v1.3.1) with a native Linux Arm64 build, Vulkan on SteamVR's own device, and frame pacing written for SteamVR on the Frame. No Lepton, no APK, no PC.
+Mario Kart Wii in VR, running natively on the Valve Steam Frame. KartFrame is my fork of heurazy's Wiicompiled VR PLUS (v1.3.1) with a native Linux Arm64 build, Vulkan on SteamVR's own device, and frame pacing written for SteamVR on the Frame. No Lepton, no APK, no PC. You need your own PAL Mario Kart Wii disc image; no game data is included.
 
-You need your own PAL Mario Kart Wii disc image. No game data is in this repository or its releases.
+## Compared with the Lepton APK
+
+Before KartFrame I played the upstream Quest APK through Lepton on my Frame. The Android build compiles the game's VR frame interpolation out, so it showed 60 frames a second with judder at 72 Hz and heavy blur at 120 Hz. I rebuilt it with interpolation at 90 Hz, which was very good but had small slowdowns. Its menus ran at 37 to 45 frames a second until I turned the menu shader off, and above 1728 per eye it had frequent late frames and 30 to 50 ms stalls, so I kept it at 1382 to 1728. Every launch needed adb and launcher workarounds, a re-signed APK and a patched dex, the controls were whatever SteamVR's remap of the Vive-wand bindings allowed, and the launch path through SteamVR broke easily.
+
+KartFrame runs at 1728 per eye and 90 Hz with interpolation, with Grand Prix and Time Trial at the game's full 60 frames a second and no double image. The Frame controller layout is in the code, the held item is in your hand, a swing throws it, the game's rumble reaches the controllers, and the controllers show in front of the menus. One Steam shortcut with its own art starts the game directly.
 
 ## What is new since 0.9.0-alpha.1
 
-- **No double image.** Both eyes of a refresh share one swapchain image, which ended the right-eye doubling in races.
-- **Grand Prix at 60 frames a second** at 1728 per eye and 90 Hz: the graphics work runs on its own thread and the renderer lock is narrow.
-- **The Time Trial ghost in 3D**, one view per eye. Projected reflections stay on the track.
+- **No double image.** I put both eyes of a refresh in one swapchain image, which ended the right-eye doubling in races.
+- **Grand Prix at 60 frames a second** at 1728 per eye and 90 Hz: I moved the graphics work to its own thread and narrowed the renderer lock. It ran at 48 to 54 before.
+- **The Time Trial ghost in 3D**, one view per eye, and projected reflections that stay on the track (both from iChris4's Wiicompiled_VR).
 - **Controls:** the item you hold is drawn in your hand, a quick swing throws it forward or back, the game's rumble shakes both controllers, and the controllers and pointer show in front of the menu screen.
-- **Defaults:** 90 Hz (120 Hz is a switch), GX thread on, 33 ms interpolation window.
+- **Settings:** refresh rate (90 or 120) and eye size, a 33 ms interpolation window, and resident geometry as an option.
+- **Defaults:** 90 Hz (120 Hz is a switch), GX thread on, narrow renderer lock.
 - **Mario Kart Wii library art** for the Steam entry, and the game says KartFrame everywhere.
 
-The full list, with the controls, is in the [README](https://github.com/simplysanatori/KartFrame#readme) and the changelog.
-
-## Known issues
-
-- Opening KartFrame's settings panel over a running race slows it (about 84 frames a second, some late frames) until it is closed; the SteamVR dashboard itself costs nothing. Fix planned: the menu path will release the renderer lock before encoding and draw the controllers from a static buffer.
-- 120 Hz at 1728 per eye overruns the GPU, so 90 Hz is the default. Anything else using the Frame's CPUs while you play (compilers, container builds) makes it stutter.
-- The heaviest sections of a course dip to about 58 frames a second.
-- Full-view 2D effects (Blooper ink) do not cover the whole view; the laser pointer's dot is not visible on the 2D menu screen; two and four player races are not measured.
-- Built but not yet confirmed in the headset: the held item, the swing to throw and the rumble. See `frame/UNTESTED.md`.
+The full list is in the [changelog](https://github.com/simplysanatori/KartFrame/blob/native/docs/CHANGELOG.md), and the controls and settings are in the [README](https://github.com/simplysanatori/KartFrame#readme).
 
 ## Download
 
@@ -30,7 +27,21 @@ The full list, with the controls, is in the [README](https://github.com/simplysa
 
 ## Install
 
-Clone the repository, run `frame/install.sh` with the tarball as its argument, then `~/Games/KartFrame/app/setup.sh` with your disc image. The [README](https://github.com/simplysanatori/KartFrame#install) has the steps. If you are updating from 0.9.0-alpha.1, run both again: the kit changed, so the game is rebuilt (about 6 minutes). Your saves and settings stay where they are, but an older `Config.toml` keeps `refresh_rate = 120` until you change it.
+Clone the repository, run `frame/install.sh` with the tarball as its argument, then `~/Games/KartFrame/app/setup.sh` with your disc image. The [README](https://github.com/simplysanatori/KartFrame#install) has the steps.
+
+If you are updating from 0.9.0-alpha.1, run both again: I rebuilt the runtime kit, so the game is built again from your disc (about 6 minutes). Your saves and settings stay where they are, but an older `Config.toml` keeps `refresh_rate = 120` until you change it.
+
+## Known issues
+
+- Opening KartFrame's own settings panel over a running race slows the race (about 84 frames a second, some late frames) until you close it. The SteamVR dashboard costs nothing.
+- 120 Hz at 1728 per eye needs about 1 ms more GPU time per refresh than the Frame has, so 90 Hz is the default.
+- The heaviest sections of a course dip a little, to about 58 frames a second.
+- Builds or other heavy work on the Frame while you play make the game stutter.
+- Blooper ink and the black of a respawn do not cover the whole view. The pointer's dot does not show on the 2D menu screen; the ray does.
+
+## Credits
+
+iChris4's [Wiicompiled_VR](https://github.com/iChris4/Wiicompiled_VR) for the held item, the swing to throw, the 3D ghost, projected reflections and resident geometry (the commits are in the changelog); heurazy's [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS), which KartFrame is built on; library art from SteamGridDB by AVEX, Sho. and MegaCrashFan96 (an upscale of CaptainScarLeg's), ids in `frame/art/CREDITS.md`.
 
 ## Reporting problems
 

@@ -1,53 +1,50 @@
 # Changelog
 
-## 1.0.0 (2026-10-28)
+## 1.0.0 (October 2026)
 
-The first full release. It plays Time Trial against a ghost and Grand Prix at 60 game frames a second, no doubled image, at 1728 pixels per eye. The only slowdown left that I know of is while KartFrame's own settings panel is open over a running race.
+The first full release of KartFrame, Mario Kart Wii VR running natively on the Valve Steam Frame. Time Trial and Grand Prix run at the game's full 60 frames a second, at 1728 pixels per eye and 90 Hz with the game's own frame interpolation, and the right-eye double image is gone. Under Lepton the Quest APK had no interpolation until I rebuilt it, menus at 37 to 45 frames a second and stalls above 1728 per eye; the [release notes](RELEASE_NOTES_1.0.0.md) have the comparison.
 
 ### Fixed
 
-- The right-eye double image in races is fixed at its cause. Both eyes of a refresh now share one swapchain image (`KARTFRAME_STEREO_PACKED=1`, the default), so SteamVR can no longer pair a right eye from one refresh with a left eye from another. In the headset A B A B (session 22) both packed launches were clean and both per-eye launches doubled. The timed hand-over (`KARTFRAME_END_PHASE=after`) stays on.
-- Grand Prix speed. The game's graphics work runs on its own thread (GX thread), and the frame worker holds the renderer lock only for a set's setup instead of the whole set (`narrow`). Two Grand Prix races of about two minutes of driving each held 60.0 frames a second; with the old lock the same race averaged 53.9 and dipped to 42.
-- The Time Trial ghost is drawn in 3D: each eye draws the ghost kart from its own view, translucent and depth-tested against the course, where the game blended one flat picture into both eyes. Adapted from iChris4's Wiicompiled_VR (f2f7c50, 7f9de4c, e89988f).
+- The right-eye double image in races. I put both eyes of a refresh in one swapchain image, so SteamVR can no longer pair a right eye from one refresh with a left eye from another (`KARTFRAME_STEREO_PACKED=1`).
+- Grand Prix speed. I moved the game's graphics work to its own thread (the GX thread) and made the frame worker hold the renderer lock only for a set's setup (`KARTFRAME_WORKER_LOCK=narrow`). Grand Prix holds 60 frames a second, where it ran at 48 to 54.
+- The Time Trial ghost is drawn in 3D: each eye draws the ghost kart from its own view, translucent and depth-tested against the course, where the game blended one flat picture into both eyes. Ported from iChris4's Wiicompiled_VR (f2f7c50, 7f9de4c, e89988f).
 - Projected reflections (Rainbow Road, Coconut Mall glass) no longer follow your head (iChris4, 4aac0ec).
-- Vertex and index staging grew (3 to 8 MB and 2 to 4 MB), and a draw that overflows is skipped and logged instead of aborting the game (iChris4, e4c98da).
-- The game's rumble (bumps, hits) now reaches both controllers; strength with `KARTFRAME_RUMBLE`. In the default gamepad mode it did not reach them at all.
-- In menus, the controllers and the pointer ray show in front of the menu screen, in 3D. They used to be hidden behind it.
+- A draw that overflows the vertex or index staging is skipped and logged instead of stopping the game, and the staging is larger: 8 and 4 MB (iChris4, e4c98da).
+- In menus the controllers and the pointer ray are drawn in front of the menu screen, in 3D, not behind it.
 
 ### Added
 
-- The item you hold is drawn in your hand in first person (iChris4: db30945, b181efa, 5f2ecc0, 7f5a849, 405ac27, 4489d4a). The models are read from your own disc at run time.
+- The item you hold, drawn in your hand in first person (iChris4: db30945, b181efa, 5f2ecc0, 7f5a849, 405ac27, 4489d4a). The models are read from your own disc at run time.
 - Swing to throw: a quick swing of the item hand forward or back throws the item that way (iChris4: ebc97ef, 4489d4a).
-- Refresh rate and eye size settings: `[vr] refresh_rate` or `KARTFRAME_REFRESH_HZ` (90 or 120), `render_scale` or `KARTFRAME_RENDER_SCALE`, `KARTFRAME_EYE_PX`. The wrapper sets the refresh rate in SteamVR for you and the game logs `view size:` at start.
-- An interpolation window of 33 ms (`KARTFRAME_INTERP_MAX_MS`): one missed game frame glides instead of stepping.
-- Resident geometry (`KARTFRAME_RESIDENT_GEOMETRY=1`, off by default): display lists cached on the GPU, drawn through native vertex input (iChris4, b5d9c19). About 2 % less GPU time in the mock.
-- The position-matrix index is baked into compacted-layout shaders (iChris4, 236665c).
-- Per-second CPU, thermal and load logging: `KARTFRAME_CPULOG=1`, `thermal.tsv` in each session folder, and a `machine` line in `report.txt`. The launch log warns when compilers or other builds are running.
-- `KARTFRAME_PASS_DUMP=<n>` logs the game's render passes for a frame; `frame/tools/abcompare.sh` compares two builds in the mock runtime.
-- KartFrame library art: the Mario Kart Wii key art from SteamGridDB (downloaded at install, never shipped), a plain KartFrame logo and a dock icon. `frame/install.sh` installs them; `--art DIR` uses your own images, `--no-art` skips them.
-- The game says KartFrame everywhere you see it: runtime logs, settings panel, window title and installer. WiiCompiled stays in the credits and licences.
+- Rumble: the game's bumps and hits shake both controllers (`KARTFRAME_RUMBLE`, strength 0.7, `0` turns it off).
+- Refresh rate and eye size settings: `[vr] refresh_rate` (90 or 120) and `render_scale`, or `KARTFRAME_REFRESH_HZ`, `KARTFRAME_RENDER_SCALE` and `KARTFRAME_EYE_PX` for one launch. The wrapper sets the refresh rate in SteamVR for you.
+- A 33 ms interpolation window (`KARTFRAME_INTERP_MAX_MS`): one missed game frame glides instead of stepping.
+- Resident geometry (`KARTFRAME_RESIDENT_GEOMETRY=1`, off by default): display lists cached on the GPU and drawn through native vertex input, about 2 % less GPU time (iChris4, b5d9c19). The position-matrix index is baked into compacted-layout shaders (iChris4, 236665c).
+- Logs: CPU use per second (`KARTFRAME_CPULOG=1`), `thermal.tsv` in each session folder, and a `machine` line in `report.txt` with other processes' CPU use. The launch log warns when compilers or other builds are running.
+- Library art: Mario Kart Wii key art from SteamGridDB (downloaded at install, never shipped), a plain KartFrame logo and a dock icon. `--art DIR` installs your own images, `--no-art` skips them.
+- The name KartFrame in the logs, the settings panel, the window title and the installer.
 
 ### Changed defaults
 
-- 90 Hz (was 120). New installs seed `refresh_rate = 90`; an older `Config.toml` keeps its 120 until you change it.
-- GX thread on, `KARTFRAME_WORKER_LOCK=narrow`, packed stereo swapchain, interpolation window 33 ms.
-- Menu controllers in front of the screen (`KARTFRAME_MENU_CONTROLLERS=eyes`).
-- Item hand: right (`cockpit_item_hand`). Item throw on (`cockpit_item_throw`).
-- Eye size stays 1728 per eye and the timed hand-over stays on.
+- 90 Hz, was 120. New installs get `refresh_rate = 90`; an older `Config.toml` keeps its 120 until you change it.
+- GX thread on, narrow renderer lock, both eyes in one swapchain, 33 ms interpolation window.
+- Controllers in front of the menu screen (`KARTFRAME_MENU_CONTROLLERS=eyes`).
+- The held item in the right hand (`cockpit_item_hand`), swing to throw on (`cockpit_item_throw`).
+- The runtime kit was rebuilt: after updating, run `setup.sh` again (about 6 minutes). Saves and settings stay where they are.
 
 ### Known issues
 
-- Opening KartFrame's settings panel over a running race slows it (about 84 frames a second, some late frames) until it is closed; the SteamVR dashboard itself costs nothing. Fix planned: the menu path will release the renderer lock before encoding and draw the controllers from a static buffer.
-- 120 Hz at 1728 per eye needs about 1 ms less GPU time a refresh than the Frame has; SteamVR skips frames in bursts. It is still a switch (`KARTFRAME_REFRESH_HZ=120`).
-- The heaviest sections of a course (600 draws or more) dip to about 58 frames a second.
-- Other work on the Frame's CPUs while you play (compilers, container builds) makes the game stutter, and the clocks drop when the Frame is hot.
-- `KARTFRAME_STEREO_PACKED=0` (one swapchain per eye) is retired. It only stays as a comparison switch and brings the right-eye double image back. Menu controllers in front of the screen need the packed layout.
-- Full-view 2D effects (Blooper ink, the black of a respawn) do not cover the whole view. The laser pointer's dot is not visible on the 2D menu screen (the ray is). Two and four player races are not measured in the headset.
-- Built but not yet seen in the headset: the held item, the swing to throw, the rumble strength, resident geometry, eye sizes above 1728. [frame/UNTESTED.md](../frame/UNTESTED.md) has the list.
+- Opening KartFrame's own settings panel over a running race slows the race (about 84 frames a second, some late frames) until you close it. The SteamVR dashboard costs nothing.
+- 120 Hz at 1728 per eye needs about 1 ms more GPU time per refresh than the Frame has, so SteamVR skips frames in bursts. It stays a switch (`KARTFRAME_REFRESH_HZ=120`).
+- The heaviest sections of a course dip a little, to about 58 frames a second.
+- Builds or other heavy work on the Frame while you play make the game stutter.
+- One swapchain per eye (`KARTFRAME_STEREO_PACKED=0`) is retired: it brings the right-eye double image back.
+- Blooper ink and the black of a respawn do not cover the whole view. The pointer's dot does not show on the 2D menu screen; the ray does.
 
 ### Credits
 
-- iChris4's [Wiicompiled_VR](https://github.com/iChris4/Wiicompiled_VR) for the ported commits named above (GPL-3.0).
+- iChris4's [Wiicompiled_VR](https://github.com/iChris4/Wiicompiled_VR) for the commits named above (GPL-3.0).
 - heurazy's [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS), which KartFrame is a fork of.
 - Library art from SteamGridDB: AVEX (portrait), Sho. (wide), MegaCrashFan96 (hero, an upscale of CaptainScarLeg's). Asset ids in `frame/art/CREDITS.md`.
 
