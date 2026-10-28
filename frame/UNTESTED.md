@@ -32,8 +32,10 @@ and the release notes. Twenty headset sessions have confirmed most of the build;
 - The laser pointer's dot on the 2D menu screen (the ray shows, the dot on the screen does not yet).
 - hud_distance_meters and hud_width_meters away from their defaults.
 
-- `KARTFRAME_MENU_CONTROLLERS=eyes|projected` (controllers in front of the screen; off by default): eyes relies on SteamVR
-  honouring a quad's eye visibility, unseen; the mock ran eyes without errors, no image was checked.
+- `KARTFRAME_MENU_CONTROLLERS=eyes` (the launcher default since session 26; controllers and the ray in front of the menu
+  screen): ran in every launch of headset sessions 24 and 25 with no visual fault reported, but not watched over long
+  sessions; it relies on SteamVR honouring a quad's eye visibility (if not, a controller on the screen could be off for
+  one eye). `projected` (screen in the room layer) has only run in the mock, no image checked; `off` is the old look.
 
 ## Controls
 

@@ -32,6 +32,10 @@
 #   KARTFRAME_STEREO_PACKED both eyes of a set in one swapchain (default 1, on: SteamVR then always shows
 #                           the two eyes of the same set); 0 or off = one swapchain per eye (A/B, and the
 #                           old right-eye double image, see README)
+#   KARTFRAME_MENU_CONTROLLERS  eyes (default since session 26: controllers and the pointer ray drawn in front of the
+#                           menu screen in 3D, one screen quad per eye; needs the packed swapchain, else off is used);
+#                           off = today's old look (they sit behind the screen); projected = the screen drawn into the
+#                           room layer (softer text). See frame/perf/LANE_AF.md
 #   KARTFRAME_VRTIMING=0    no compositor timing log
 #   KARTFRAME_THERMLOG=0    no thermal.tsv (hottest thermal zone, CPU and GPU clocks once a second)
 #   KARTFRAME_SESSION_ENV_ONCE=1   (inside session.env) delete session.env after this launch
@@ -67,6 +71,16 @@ EP=${KARTFRAME_END_PHASE:-after}
 if [ "$EP" = off ] || [ "$EP" = 0 ]; then unset KARTFRAME_END_PHASE; log "KARTFRAME_END_PHASE=off: frames handed over at the wake-up"; else export KARTFRAME_END_PHASE=$EP; log "KARTFRAME_END_PHASE=$EP"; fi
 SP=${KARTFRAME_STEREO_PACKED:-1}
 if [ "$SP" = off ] || [ "$SP" = 0 ]; then export KARTFRAME_STEREO_PACKED=0; log "KARTFRAME_STEREO_PACKED=0: one swapchain per eye"; else export KARTFRAME_STEREO_PACKED=1; log "KARTFRAME_STEREO_PACKED=1: both eyes of a set in one swapchain"; fi
+# Menu controllers (the game reads eyes|projected, anything else is off): eyes unless off or projected. Eyes needs the packed swapchain.
+MC=${KARTFRAME_MENU_CONTROLLERS:-eyes}
+case "$MC" in
+    off | 0) export KARTFRAME_MENU_CONTROLLERS=off; log "KARTFRAME_MENU_CONTROLLERS=off: controllers and the ray hidden behind the menu screen" ;;
+    projected) export KARTFRAME_MENU_CONTROLLERS=projected; log "KARTFRAME_MENU_CONTROLLERS=projected: menu screen drawn into the room layer" ;;
+    *)
+        [ "$MC" = eyes ] || log "KARTFRAME_MENU_CONTROLLERS=$MC is not off, eyes or projected, using eyes"
+        if [ "$KARTFRAME_STEREO_PACKED" = 1 ]; then export KARTFRAME_MENU_CONTROLLERS=eyes; log "KARTFRAME_MENU_CONTROLLERS=eyes: controllers and the ray in front of the menu screen (off or projected to compare)"
+        else export KARTFRAME_MENU_CONTROLLERS=off; log "KARTFRAME_MENU_CONTROLLERS=eyes needs KARTFRAME_STEREO_PACKED=1, using off"; fi ;;
+esac
 
 # GX thread (the game reads KARTFRAME_GX_THREAD=0|1 only, anything else it ignores): on unless 0 or off.
 GXT=${KARTFRAME_GX_THREAD:-1}

@@ -38,6 +38,8 @@ Confirmed in the headset: the native build in SteamVR; 119 to 120 sets of eyes a
 
 Grand Prix speed: the game used to run at 48 to 50 frames a second in Grand Prix races. Since session 24 it is on a second thread for the graphics work (the GX thread, on by default), and since session 25 the frame worker no longer blocks that thread for a whole refresh (`KARTFRAME_WORKER_LOCK=narrow`, the default): two races of about two minutes of driving each held 60 frames a second, against 54 on average (dips to 42) with the old lock. The heaviest sections of a course can still dip to about 58, and I am working on the next limits. 120 Hz is optional (`KARTFRAME_REFRESH_HZ=120`): the GPU overruns its time at 1728 per eye and SteamVR drops frames in bursts.
 
+Menu controllers: since this change the controllers and the pointer ray are drawn in front of the menu screen in 3D by default (`KARTFRAME_MENU_CONTROLLERS=eyes`); they used to sit behind it. It ran in every launch of headset sessions 24 and 25 without a reported fault; long sessions are still to be watched.
+
 Known issues: the Time Trial ghost is flat; full-view 2D effects such as Blooper ink do not cover the whole view; the laser pointer's dot is not visible on the 2D menu screen (the ray is); two and four player races are heavier and not yet measured in the headset. The short list of what is built but not yet confirmed is in [frame/UNTESTED.md](frame/UNTESTED.md).
 
 ## The double image (known issue)
@@ -171,7 +173,7 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | `KARTFRAME_END_PHASE` | `after` (default), `before`, or `off`: when in the refresh each frame is handed to SteamVR, against the compositor grid the wrapper's helper publishes. `off` hands over at the wake-up, which doubles the image |
 | `KARTFRAME_STEREO_PACKED` | `1` (default) puts both eyes of a set in one 3456x1728 swapchain image, released once. `0` or `off` goes back to one swapchain per eye, to compare; that is the layout with the right-eye double image |
 | `KARTFRAME_END_DELAY_US` | A fixed delay after the wake-up instead of the grid, in microseconds; also the fallback when the grid is missing (4000) |
-| `KARTFRAME_MENU_CONTROLLERS` | `eyes` draws the controllers and the ray in front of the menu screen (needs the packed default); `projected` draws the screen into the room layer instead (softer text); off by default |
+| `KARTFRAME_MENU_CONTROLLERS` | `eyes` (default) draws the controllers and the ray in front of the menu screen in 3D, one screen quad per eye (needs the packed default, else off is used). `off` goes back to the old look, where they sit behind the screen; `projected` draws the screen into the room layer instead (softer text) |
 | `KARTFRAME_RUMBLE` | `0` turns off the game's rumble on the controllers; a strength such as `0.4` or `1.0` sets it (default 0.7; `1` alone means on at the default) |
 | `KARTFRAME_VRTIMING_FRAMES` | 1 logs every compositor frame to `vrframes.log` in the session folder |
 | `KARTFRAME_HOME` | The data folder, if it is not `~/.local/share/KartFrame` |
