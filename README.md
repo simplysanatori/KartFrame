@@ -10,7 +10,7 @@ You need your own Mario Kart Wii disc. No game data is in this repository or its
 
 Version 1.0.0. It plays on my Steam Frame at 1728 pixels per eye and 90 Hz, with both eyes rendered on every refresh from your head position at that refresh, and the game at its full 60 frames a second in Time Trial and Grand Prix, with no doubled image. Menus sit on a steady flat screen with the controllers and the pointer in front of it, and the race HUD on a virtual screen.
 
-**Compared with the Lepton APK.** Before KartFrame I played the upstream Quest APK through Lepton. The Android build has the game's frame interpolation compiled out, so it judders at 72 Hz and blurs at 120 Hz; my rebuild with interpolation at 90 Hz was very good but had small slowdowns. Its menus ran at 37 to 45 frames a second with the menu shader on, and above 1728 per eye it had late frames and 30 to 50 ms stalls. Every launch needed adb workarounds, a re-signed APK and a patched dex, and the controls were limited to SteamVR's remap of the Vive-wand bindings. KartFrame runs natively at 1728 per eye and 90 Hz with interpolation, Grand Prix and Time Trial at a full 60 frames a second, the Frame controller layout in code, the held item in your hand, rumble, and one Steam shortcut that starts the game directly.
+**Compared with the Lepton APK.** Before KartFrame I played the upstream Quest APK through Lepton. The Android build has the game's frame interpolation compiled out, so it judders at 72 Hz and blurs at 120 Hz; my rebuild with interpolation at 90 Hz was very good but had small slowdowns. Its menus ran at 37 to 45 frames a second with the menu shader on, and above 1728 per eye it had late frames and 30 to 50 ms stalls. Every launch needed adb workarounds, a re-signed APK and a patched dex, and the controls were limited to SteamVR's remap of the Vive-wand bindings. KartFrame runs natively at 1728 per eye and 90 Hz with interpolation, Grand Prix and Time Trial at a full 60 frames a second, the Frame controller layout in code, rumble on the Frame controllers, and one Steam shortcut that starts the game directly.
 
 Known issues:
 
@@ -29,18 +29,19 @@ Upstream runs on Windows and on the Meta Quest. On the Frame that would mean Lep
 - Frame pacing written for SteamVR on the Frame: both eyes on every refresh from that refresh's head pose, eye images handed over only after the GPU has finished them, at a fixed point of the refresh. The game's own VR frame interpolation fills 90 Hz from its 60 frames a second.
 - Both eyes of a refresh in one swapchain image, which ended the right-eye double image.
 - The game's graphics work on its own thread (upstream's GX thread, switched on here and fixed for the nameplate hook) and a narrow renderer lock: Grand Prix at 60 frames a second where it was 48 to 54.
-- The Time Trial ghost drawn in 3D, one view per eye, and projected reflections that stay on the track (both from iChris4's fork).
-- The held item in your hand and the swing to throw it (from iChris4's fork), and the game's rumble on the controllers.
+- The game's rumble on the Frame controllers.
 - The controllers and the pointer in front of the menu screen, in 3D.
 - The Frame controller layout in code, with no SteamVR binding file, and simplified Frame controller models converted at install from your own SteamVR files.
 - The 2D menus and the race HUD on a flat quad layer in front of you.
-- A first run that extracts your disc, translates the game and compiles it on the Frame with a bundled compiler, plus an installer with a Steam library entry and Mario Kart Wii library art.
-- A launch wrapper that sets SteamVR's per-app settings at every launch and writes a session log folder with CPU, thermal and pacing numbers.
+- A first run that extracts your own disc, translates the game and compiles it on the Frame with a bundled compiler, plus an installer with a Steam library entry.
+- Refresh rate and eye size settings, applied through SteamVR's per-app settings, which the launch wrapper sets at every launch. Each launch writes a session log folder with CPU, thermal and pacing numbers.
+- The KartFrame name in the game, and Mario Kart Wii library art for the Steam entry.
+- Features from iChris4's Wiicompiled_VR are in too: the item in your hand, swing to throw, the 3D ghost, the reflection fix.
 
 ## What changed since 0.9.0-alpha.1
 
-- Fixed: the right-eye double image (packed stereo swapchain), the Grand Prix slowdown (GX thread, narrow lock), the flat Time Trial ghost, reflections that followed your head, controllers hidden behind the menu screen.
-- Added: held item, swing to throw, rumble on the controllers, refresh rate and eye size settings, resident geometry (opt-in), CPU and thermal logging, KartFrame library art and name.
+- Fixed: the right-eye double image (packed stereo swapchain), the Grand Prix slowdown (GX thread, narrow lock), controllers hidden behind the menu screen.
+- Added: rumble on the Frame controllers, refresh rate and eye size settings, CPU and thermal logging, KartFrame library art and name, and iChris4's held item, swing to throw, 3D ghost and reflection fix.
 - Defaults changed: 90 Hz (was 120), GX thread on, narrow lock, packed swapchain, 33 ms interpolation window, menu controllers in front of the screen. The full list is the [changelog](docs/CHANGELOG.md).
 
 ## Requirements
@@ -237,7 +238,7 @@ If you would like more Steam Frame ports, you can also [buy me a coffee](https:/
 
 - Built by [simplysanatori](https://github.com/simplysanatori).
 - [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS) by heurazy, which this is built on, and heurazy's [Mario Kart Wii VR port](https://github.com/heurazy/mario-kart-wii-VR-port) before it.
-- [Wiicompiled VR](https://github.com/iChris4/Wiicompiled_VR) by iChris4, the OpenXR port of WiiCompiled that Wiicompiled VR PLUS started from, and the WiiCompiled translator that turns the Wii game into C++. The held item, the swing to throw, the 3D ghost, projected reflections, resident geometry and a shader fix in this release are ported from iChris4's fork; the commits are named in the [changelog](docs/CHANGELOG.md).
+- [Wiicompiled VR](https://github.com/iChris4/Wiicompiled_VR) by iChris4, the OpenXR port of WiiCompiled that Wiicompiled VR PLUS started from, and the WiiCompiled translator that turns the Wii game into C++. The held item, the swing to throw, the 3D ghost, projected reflections, resident geometry and a shader fix in this release are ported from iChris4's fork.
 - Library art from [SteamGridDB](https://www.steamgriddb.com/): AVEX (portrait), Sho. (wide) and MegaCrashFan96 (hero, an upscale of CaptainScarLeg's). Never shipped, downloaded at install; ids in `frame/art/CREDITS.md`. The logo font is Lilita One by Juan Montoreano (SIL OFL 1.1).
 - [aurora](https://github.com/encounter/aurora), the renderer, and [Dawn](https://dawn.googlesource.com/dawn), the WebGPU implementation under it.
 - [SDL3](https://github.com/libsdl-org/SDL) and the [OpenXR SDK](https://github.com/KhronosGroup/OpenXR-SDK).
