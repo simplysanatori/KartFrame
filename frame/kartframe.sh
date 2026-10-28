@@ -33,7 +33,8 @@
 #                           the two eyes of the same set); 0 or off = one swapchain per eye (A/B, and the
 #                           old right-eye double image, see README)
 #   KARTFRAME_VRTIMING=0    no compositor timing log
-#   KARTFRAME_THERMLOG=0    no thermal.tsv (hottest thermal zone, CPU and GPU clocks once a second)
+#   KARTFRAME_THERMLOG=0    no thermal.tsv (hottest thermal zone, CPU and GPU clocks, CPU load: the game, other
+#                           processes, runnable threads; once a second)
 #   KARTFRAME_SESSION_ENV_ONCE=1   (inside session.env) delete session.env after this launch
 #   KARTFRAME_KEEP_SESSIONS number of session folders kept (default 30)
 # Test hooks: KARTFRAME_VRCMD, KARTFRAME_STEAMVR_DIR, KARTFRAME_VRSETTINGS, KARTFRAME_VRTIMING_PY,
