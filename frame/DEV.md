@@ -294,6 +294,9 @@ in that quad's place with its own view, blended with a constant alpha and depth-
 (aurora common.cpp link_composite_source; gx.cpp: the stereoStencil bit 2 pipeline sibling). KARTFRAME_GHOST_MONO=1
 keeps the flat composite; KARTFRAME_GHOST_ALPHA=<0..1> (0.5) the ghost's strength. Log lines "Time Trial ghost: pass
 N ... is drawn by each eye" (once) or "... left flat (<reason>)" (up to 4). Details: frame/perf/LANE_AE.md.
+Lane AM: the erase is the colour copy's scissored clear (copy 892x456 of a 939x528 EFB), now accepted;
+KARTFRAME_PASS_DUMP=<n> logs the pass layout (`Pass dump:` lines) of the first n frames with such a composite
+(frame/perf/LANE_AM.md).
 
 ## Lane AF switch (controllers in front of the menu screen)
 KARTFRAME_MENU_CONTROLLERS=off|eyes|projected (default off: the environment layer under the screen's quad, which
