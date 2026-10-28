@@ -317,3 +317,7 @@ the GX thread at each present. KARTFRAME_INTERP_MAX_MS=<ms> keeps the interpolat
 <ms> rounded up to whole VI intervals (33: one missed retrace); default unset = 1.5 intervals. Wrapper:
 `thermal.tsv` in the session folder (KARTFRAME_THERMLOG=0 off). Mock: KF_MOCKRUN_VIDEO adds [video] lines.
 Details and numbers: frame/perf/LANE_AJ.md.
+
+KARTFRAME_WORKER_LOCK=full|narrow (default full) sets how much of a refresh set the frame worker runs under the renderer
+mutex; the `cpulog:` line ends with the lock-wait and worker-hold fields. Lock map, audit, fields and mock A/B:
+frame/perf/LANE_AK.md. Headset comparison: frame/perf/session-h25/README.md.

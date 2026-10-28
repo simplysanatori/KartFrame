@@ -11,7 +11,7 @@
 #   --out DIR         where the tarball and its sha256 go (default <repo>/release)
 #
 # The tarball has no top level folder: kit/, toolchain/, translator/, setup.sh, kartframe.sh,
-# install.sh, uninstall.sh, collect-logs.sh, steam-cef.py, frame-controller-models.py,
+# install.sh, uninstall.sh, collect-logs.sh, steam-cef.py, art/ (art.py, logo, icon, set/), frame-controller-models.py,
 # Config.frame.toml, tools/{vrtiming.py,session-report.py}, README.md, docs/, LICENSE,
 # THIRD-PARTY-NOTICES.md, licenses/. frame/install.sh unpacks it into the program folder.
 # Then frame/boundary-check.sh and frame/tools/privacy-check.sh run on the tarball itself, and the
@@ -45,7 +45,7 @@ done
     fail "no toolchain-aarch64/ or toolchain-aarch64.tar.xz in $tc (frame/toolchain.sh <dir>)"
 for f in README.md LICENSE THIRD-PARTY-NOTICES.md docs/RELEASE_NOTES_0.9.0-alpha.1.md docs/CHANGELOG.md docs/TECHNICAL_NOTES.md \
          frame/setup.sh frame/kartframe.sh frame/install.sh frame/uninstall.sh frame/collect-logs.sh frame/steam-cef.py \
-         frame/frame-controller-models.py frame/Config.frame.toml frame/tools/vrtiming.py frame/tools/session-report.py \
+         frame/frame-controller-models.py frame/Config.frame.toml frame/art/art.py frame/art/logo.png frame/art/icon-512.png frame/art/CREDITS.md frame/art/set/p.png frame/art/set/wide.png frame/art/set/hero.png frame/tools/vrtiming.py frame/tools/session-report.py \
          frame/boundary-check.sh frame/release-allowlist.txt frame/tools/privacy-check.sh; do
     [[ -f $repo/$f ]] || fail "missing $f"
 done
@@ -61,7 +61,7 @@ trap 'cleanup_on_fail; rm -rf "$stage"' ERR
 
 echo "release: staging"
 cp -a "$kit" "$stage/kit"
-mkdir -p "$stage/toolchain" "$stage/translator" "$stage/tools" "$stage/docs"
+mkdir -p "$stage/toolchain" "$stage/translator" "$stage/tools" "$stage/docs" "$stage/art/set"
 if [[ -x $tc/toolchain-aarch64/bin/clang ]]; then
     cp -a "$tc/toolchain-aarch64/." "$stage/toolchain/"
 else
@@ -74,6 +74,9 @@ for f in setup.sh kartframe.sh install.sh uninstall.sh collect-logs.sh steam-cef
     install -m 0755 "$here/$f" "$stage/$f"
 done
 install -m 0644 "$here/frame-controller-models.py" "$here/Config.frame.toml" "$stage/"
+install -m 0755 "$here/art/art.py" "$stage/art/art.py"
+install -m 0644 "$here/art/logo.png" "$here/art/icon-512.png" "$here/art/CREDITS.md" "$stage/art/"
+install -m 0644 "$here"/art/set/*.png "$stage/art/set/"
 install -m 0644 "$here/tools/vrtiming.py" "$here/tools/session-report.py" "$stage/tools/"
 install -m 0644 "$repo/README.md" "$repo/LICENSE" "$repo/THIRD-PARTY-NOTICES.md" "$stage/"
 install -m 0644 "$repo/docs/RELEASE_NOTES_0.9.0-alpha.1.md" "$repo/docs/CHANGELOG.md" "$repo/docs/TECHNICAL_NOTES.md" "$stage/docs/"

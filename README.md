@@ -163,6 +163,7 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | `KARTFRAME_REFRESH_HZ` | 90 or 120 for this launch, instead of `[vr] refresh_rate` (default 90) |
 | `KARTFRAME_GX_THREAD` | `1` (default) runs the game's graphics work on its own thread: game-thread CPU 13.2 to 8.5 ms a frame, 8 to 11 frames a second more in Grand Prix. `0` or `off` goes back to one thread, to compare |
 | `KARTFRAME_INTERP_MAX_MS` | Milliseconds of gap across which the interpolation keeps the previous frame (default 33, so one missed retrace glides instead of stepping; sets drawn without a previous frame went from 4.9 % to 0). `0` or `off` goes back to the game's own 1.5 intervals |
+| `KARTFRAME_WORKER_LOCK` | `full` (default) or `narrow`: how long the frame worker holds the renderer lock per refresh set. `narrow` holds it for the set's setup only (about 0.55 ms instead of 1.8 ms in the mock, about 0.9 instead of 3 ms expected on the headset) and encodes the eyes outside it, so the graphics thread blocks less (its lock wait fell 64 to 70 % in the mock; images the same within noise). Untested on the headset; the default stays `full` until it is |
 | `KARTFRAME_EYE_PX` | The per-eye size the wrapper asks of SteamVR, 1024 to 4096 (default 1728; SteamVR's 100 % is 2160); `render_scale` multiplies it |
 | `KARTFRAME_RENDER_SCALE` | `render_scale` for this launch, e.g. 1.25 for 2160 per eye |
 | `KARTFRAME_SYSMEM` | 0 turns off the GPU's direct memory rendering mode (`TU_DEBUG=sysmem`); it is on by default |
