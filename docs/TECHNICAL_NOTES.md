@@ -12,12 +12,13 @@ I did not write this code by hand. The port, its scripts and these notes were wr
 
 ## Status
 
-0.9.0-alpha.1, pre-release. The build has been through twenty headset sessions. Confirmed: native
-Linux Arm64 on SteamVR at 120 Hz and 1728 per eye, 119-120 sets a second in races with under 1 % late,
-the game at its full 60 fps, quad-layer menus, the HUD on the virtual screen, the Frame controls and
-models, the first run from a disc in about 6 minutes. Open: the double image (below) is removed by a
-timing mitigation, not yet by a fix of its cause; the Time Trial ghost is flat; full-view 2D effects and
-the pointer dot on the menu screen are pending. The per-session records are in `frame/perf/`.
+1.0.0 (2026-10-28). The build has been through twenty-six headset sessions. Confirmed: native Linux Arm64 on
+SteamVR at 1728 per eye and 90 Hz (120 Hz optional), Grand Prix at 60.0 game frames a second with no late
+sets, Time Trial against a 3D ghost, no double image (fixed, see below), quad-layer menus with the controllers
+in front of the screen, the HUD on the virtual screen, the Frame controls and models, the first run from a
+disc in about 6 minutes. Open: the SteamVR dashboard slows the game while it is open over it; 120 Hz needs
+about 1 ms less GPU time a refresh; the heaviest course sections dip to about 58; full-view 2D effects and the
+pointer dot on the menu screen are pending. The per-session records are in `frame/perf/`.
 
 ## How it works
 
@@ -79,7 +80,7 @@ Every refresh (8.33 ms at 120 Hz):
 4. In **inline** mode the pacing thread waits for the GPU to finish that set, releases it and ends the frame with the same poses. In **pipelined** mode the set stays acquired into the next refresh: the previous set is waited for, released and ended with its own poses, whose display time is this refresh's by construction. The price is one refresh of latency; the gain is CPU and GPU work that overlap.
 5. If a set is not finished by the deadline, the previous layer is shown again with its own poses, and the miss is counted. An unfinished image is never released.
 
-`[vr] frame_pacing` is `auto`, `inline` or `pipelined`; `auto` is pipelined, because inline did not fit encode plus GPU of both eyes into one refresh in the mock measurements. `KARTFRAME_PACING` overrides it. An optional fallback to new eyes every second refresh exists (`KARTFRAME_HALF_RATE`). Its default is being settled after the first headset session. [to confirm in the headset]
+`[vr] frame_pacing` is `auto`, `inline` or `pipelined`; `auto` is pipelined, because inline did not fit encode plus GPU of both eyes into one refresh in the mock measurements. `KARTFRAME_PACING` overrides it. An optional fallback to new eyes every second refresh exists (`KARTFRAME_HALF_RATE`); it is off by default.
 
 The game's clock is converted to `XrTime` with `XR_KHR_convert_timespec_time`, which SteamVR offers. The first frame's `CLOCK_MONOTONIC` anchor is kept as a fallback. Input keeps its state through a loss of focus shorter than a second, because SteamVR takes focus for a few milliseconds now and then.
 
@@ -94,10 +95,10 @@ The game's own VR frame interpolation (aurora's stereo replay with matched previ
 SteamVR drops its per-app settings now and then, so the wrapper sets them at every launch through `vrcmd` and reads them back from `steamvr.vrsettings`, logging each difference:
 
 ```
-preferredRefreshRate=120 framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2 resolutionOverride=1728
+preferredRefreshRate=90 framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2 resolutionOverride=1728
 ```
 
-They only apply to a launch from the Steam library, where `SteamAppId` is set. 90 Hz felt wrong for a 60 frame a second game. [to confirm in the headset] The wrapper also sets `TU_DEBUG=sysmem` unless `KARTFRAME_SYSMEM=0`: on this GPU it was 7 to 8 percent faster for a draw bound game in the mock measurements. Valve's implicit layer `XR_APILAYER_VALVE_fdm_injection` sits in the Vulkan chain; `KARTFRAME_FDM_LAYER=0` sets `DISABLE_VULKAN_FDM_INJECTION_LAYER=1` so the two can be compared. Eye tracked foveation saved almost nothing and is not used.
+They only apply to a launch from the Steam library, where `SteamAppId` is set. The rate is `[vr] refresh_rate` or `KARTFRAME_REFRESH_HZ` (90 or 120). 90 is the default since headset session 24: at 1728 per eye the GPU overruns 120 Hz by about 1 ms a refresh and SteamVR skips frames in bursts, and the interpolated 90 Hz was judged good. The wrapper also sets `TU_DEBUG=sysmem` unless `KARTFRAME_SYSMEM=0`: on this GPU it was 7 to 8 percent faster for a draw bound game in the mock measurements. Valve's implicit layer `XR_APILAYER_VALVE_fdm_injection` sits in the Vulkan chain; `KARTFRAME_FDM_LAYER=0` sets `DISABLE_VULKAN_FDM_INJECTION_LAYER=1` so the two can be compared. Eye tracked foveation saved almost nothing and is not used.
 
 ### Resolution
 
@@ -105,17 +106,19 @@ They only apply to a launch from the Steam library, where `SteamAppId` is set. 9
 
 ### Controls
 
-The layout is in code, in `runtime/include/vr/frame_controls.h`, as pure functions that a table test checks without OpenXR. The runtime enables `XR_VALVE_frame_controller_interaction`, suggests bindings for `/interaction_profiles/valve/frame_controller`, and latches the layout when `xrGetCurrentInteractionProfile` reports that profile. There is no SteamVR binding file. The controls table in the README is the layout as coded. [to confirm in the headset]
+The layout is in code, in `runtime/include/vr/frame_controls.h`, as pure functions that a table test checks without OpenXR. The runtime enables `XR_VALVE_frame_controller_interaction`, suggests bindings for `/interaction_profiles/valve/frame_controller`, and latches the layout when `xrGetCurrentInteractionProfile` reports that profile. There is no SteamVR binding file. The controls table in the README is the layout as coded.
+
+Since 1.0.0 the input layer also has the swing-to-throw detector (`openxr_item_throw.h`, from iChris4's fork): it watches the item hand's grip in the seat frame and, on a swing, plays an aimed throw on the virtual gamepad's port (stick Y fully forward or back, then the item button), because the default controller mode is the gamepad and not the Wii Remote path the fork used. The GameCube rumble motor (`PAD__ControlMotor_HLE`) is reported to a bridge and shaped into 50 ms haptic pulses on both controllers (`openxr_gamepad_rumble.h`). The held item is read at the race draw boundary and drawn by aurora in each eye's cockpit pass.
 
 The View button has a small state machine: a tap goes back on release, a half second hold opens the VR settings panel, and a press while the panel is open closes it without also going back.
 
 ### Controller models
 
-SteamVR's own Frame controller models have about 93,000 vertices a hand, and animating them on the CPU every frame made menus slow in earlier tests. `frame/frame-controller-models.py` therefore reads them from SteamVR's `frame_controller` driver on the user's Frame at install, simplifies them to about 4,000 triangles a hand, bakes the ambient occlusion into the base colour texture and writes the game's own model format into `UserData/controller_models/frame`. Valve's files are only read locally, never copied into the repository or a release. If the converted models are missing, the game draws its procedural controllers. [to confirm in the headset]
+SteamVR's own Frame controller models have about 93,000 vertices a hand, and animating them on the CPU every frame made menus slow in earlier tests. `frame/frame-controller-models.py` therefore reads them from SteamVR's `frame_controller` driver on the user's Frame at install, simplifies them to about 4,000 triangles a hand, bakes the ambient occlusion into the base colour texture and writes the game's own model format into `UserData/controller_models/frame`. Valve's files are only read locally, never copied into the repository or a release. If the converted models are missing, the game draws its procedural controllers.
 
 ### Menus and the HUD
 
-The game's 2D screen (menus, intro screens, the race HUD) is shown as a flat quad layer in front of the player instead of being drawn into the eyes, placed by `hud_distance_meters` and `hud_width_meters`. This is being finished. [to confirm in the headset]
+The game's 2D screen (menus, intro screens, the race HUD) is shown as a flat quad layer in front of the player instead of being drawn into the eyes, placed by `hud_distance_meters` and `hud_width_meters`.
 
 ### Packaging
 
@@ -132,12 +135,12 @@ The first session on a development build showed judder, half rate flapping and f
 - The menus were drawn into the eyes with a projected surface. The intro and controller guide screens, together with the controllers, cost much more GPU time than the race path I had measured in the mock, and the fallback to every second refresh switched on and off repeatedly. A large share of the layers were repeats of an earlier set.
 - The game asked for 90 Hz through `XR_FB_display_refresh_rate`, the only rate the runtime offers there, before the per-app setting gave 120 Hz.
 
-Fixes made or in progress:
+Fixes made (confirmed in later sessions, except the item box):
 
-- Menus move to a flat quad layer. [to confirm in the headset]
-- The every second refresh fallback is no longer taken as a default. [to confirm in the headset]
-- The game stops asking for a refresh rate that the runtime does not offer. [to confirm in the headset]
-- `TU_DEBUG=sysmem` is checked against translucent overlays. [to confirm in the headset]
+- Menus move to a flat quad layer.
+- The every second refresh fallback is no longer taken as a default.
+- The game stops asking for a refresh rate that the runtime does not offer.
+- `TU_DEBUG=sysmem` is checked against translucent overlays.
 - The item box (the roulette) is drawn in the wrong place; reprojected 2D draws are being clipped to their frame rectangle. [to confirm in the headset]
 
 ## The double image: what twenty sessions found
@@ -156,17 +159,17 @@ GPU work, the refresh rate, and the thread priority boost.
 What SteamVR itself showed: the game's own recorded race images, handed over by a minimal probe loop
 (`frame/tools/xrprobe --replay`) in six variations including the game's own order, were clean.
 
-The mechanism, from logging every compositor frame beside the game's own timeline (`tools/vrtiming.py`
+The mechanism (the first account of it, kept as measured; the cause is the packed-swapchain paragraph further down), from logging every compositor frame beside the game's own timeline (`tools/vrtiming.py`
 frame mode, `frame/tools/phase.py`): the compositor's update runs at about vsync + 3.0 to + 5.3 ms and
 takes each eye's newest released image when it reaches that eye; the game handed its frame over near those
 points, and whether a hand-over fell before or after an eye's pick-up changed from refresh to refresh. A
 launch whose hand-over kept one side every frame was clean; one whose compositor updates started early in
 episodes was doubled. Ending each frame at a fixed phase against the published grid (`KARTFRAME_END_PHASE`,
 lane X) keeps one side and removes the doubling. It leaves the right eye one set ahead of the left and the
-compositor reusing a frame now and then, so it is a mitigation. The probe ends its frames at the same phase
+compositor reusing a frame now and then, so it was a mitigation. The probe ends its frames at the same phase
 as the doubled default and is clean, so the phase is not the cause; the remaining difference is the 4-7 ms
-of GPU work the game submits right after each hand-over on the GPU the compositor composes on. That is the
-next experiment (the probe with synthetic GPU load; lane Y, unfinished).
+of GPU work the game submits right after each hand-over on the GPU the compositor composes on. That experiment (the probe with synthetic GPU load) was abandoned when the packed swapchain, below,
+ended the problem.
 
 Session 21 (2026-10-27): with both eyes in one swapchain image per set (`KARTFRAME_STEREO_PACKED=1`) the
 race was clean with the end lock, and also clean with the lock off, where the old right-eye double image did
@@ -174,6 +177,40 @@ not appear. That fits the per-eye pick-up model: the compositor takes each eye's
 own point in the refresh, and one image per set removes the chance of pairing a right eye from one set with a
 left eye from another. Clean in one session each, so a follow-up A B A B of full races (packed against
 per-eye) is pending (`frame/perf/session-h22/`). The wrapper now defaults to packed with the end lock kept.
+
+**Fixed (session 22, 2026-10-27).** The A B A B of about one minute of racing per launch
+(`frame/perf/session-h22/RESULTS.md`) settled it: the two packed launches were "perfect" and "good, with slight
+jitter", the two per-eye launches "bad, doubling in the right eye" and "terrible, right eye true doubling every
+moment". The end phase was locked to "after" in all four launches (the per-eye launch 04 had no flips and still
+doubled), so the hand-over point was never the cause. What fits: with one swapchain per eye, SteamVR's compositor
+can take the right eye from one set and the left from another, and a head turn shows that as a doubled world.
+With both eyes of a set in one image, the pair cannot be split. Packed (`KARTFRAME_STEREO_PACKED=1`) is the
+default; one swapchain per eye is retired and kept only as a comparison switch. The end lock stays on. The
+packed layout held in Grand Prix (session 23 onwards) with no doubling reported in any launch.
+
+## Grand Prix speed (sessions 23 to 25)
+
+Grand Prix ran the game at 43 to 51 frames a second, which the interpolation turned into uneven stepping. The
+cause was the game thread's CPU (13 to 14.5 ms a frame), not the eye size, heat or scheduling. Two changes
+fixed it (`frame/perf/session-h23` to `session-h25`): the GX thread (`KARTFRAME_GX_THREAD=1`, upstream's switch,
+now on) took the graphics work off the game thread (13.2 to 8.5 ms a frame; the nameplate hook had to post its
+depth and anchor calls to that thread, as they drain aurora's command queue), and a narrow renderer lock
+(`KARTFRAME_WORKER_LOCK=narrow`, 2026-10-27) lets the frame worker hold the lock only for a set's setup, not its
+encode, which cut the graphics thread's lock wait from 5.0 to 1.7-2.6 ms a frame: 60.0 against 53.9 frames a
+second, and 59.9 against 47.6 on the same paused frame. The interpolation keeps its previous frame across gaps of
+up to 33 ms. The limits left are the graphics thread's decode per draw in the heaviest sections, the lock time
+that remains and the per-set encode.
+
+## Time Trial ghost (2026-10-28)
+
+The game draws the ghost alone into the cleared EFB, copies the picture out (colour and depth), clears the part it
+copied, draws the race and blends the copy back with one quad. That quad was a flat picture in both eyes. Each eye
+now re-draws the ghost's own 3D draws at the composite, translucent (0.5) and depth-tested. The first version
+never engaged, because the clear after the copy is a scissored clear of the copied rectangle, not a whole-target
+load op; the link now accepts a colour and depth clear covering the depth copy's area. `KARTFRAME_PASS_DUMP=<n>`
+logs the passes of the first n such frames. Confirmed in the headset: one kart at the right depth.
+
+
 
 ## Building
 

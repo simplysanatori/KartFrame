@@ -136,7 +136,7 @@ if [ ! -f "$STATE/Config.toml" ] && [ -f "$HERE/Config.frame.toml" ]; then
 fi
 
 # SteamVR's per-app settings, every launch. SteamAppId is set by Steam for a library launch.
-# The refresh rate: KARTFRAME_REFRESH_HZ, else the config's [vr] refresh_rate, else 120. SteamVR offers the game
+# The refresh rate: KARTFRAME_REFRESH_HZ, else the config's [vr] refresh_rate, else 90. SteamVR offers the game
 # only the rate its per-app setting runs, so the wrapper sets that rate and hands the same one to the game.
 HZ_FROM=KARTFRAME_REFRESH_HZ HZ=$KARTFRAME_REFRESH_HZ
 if [ -z "$HZ" ]; then
