@@ -136,6 +136,21 @@ void quiesce_frame_worker() noexcept;
 std::recursive_mutex& renderer_gpu_mutex() noexcept;
 bool stereo_frame_provider_active() noexcept;
 
+// Lane AK: time blocked acquiring renderer_gpu_mutex(), by site, for the KARTFRAME_CPULOG line
+// (aurora_lock_stats_line). Fifo is the FIFO decode outside GXDrawDone, DrawDone the decode inside it.
+enum class GpuLockSite : uint32_t { Fifo, DrawDone, DisplayList, RawDraw, EndFrame, Overlay, Seal, Prepare, Set, NewFrame, Count };
+void note_gpu_lock_wait(GpuLockSite site, uint64_t ns) noexcept;
+// Set by GXDrawDone around its drain, on the thread that runs it (the GX thread when it is on).
+extern thread_local bool t_gpuLockInDrawDone;
+// Holds renderer_gpu_mutex() like a lock_guard; only a contended acquisition is timed (one try_lock otherwise).
+class TimedGpuLock {
+public:
+  explicit TimedGpuLock(GpuLockSite site) noexcept;
+  ~TimedGpuLock() { renderer_gpu_mutex().unlock(); }
+  TimedGpuLock(const TimedGpuLock&) = delete;
+  TimedGpuLock& operator=(const TimedGpuLock&) = delete;
+};
+
 template <typename T>
 class ArrayRef {
 public:

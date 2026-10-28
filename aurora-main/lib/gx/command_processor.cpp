@@ -471,7 +471,7 @@ void process(const u8* data, u32 size, bool bigEndian) {
   ZoneScoped;
   // Everything decoded here mutates renderer state (GX state, the recorded command lists and the mapped staging
   // buffers), so take the renderer GPU mutex once for the whole drain rather than once per draw command.
-  std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
+  const aurora::TimedGpuLock gpuLock(aurora::GpuLockSite::Fifo);
   u32 pos = 0;
 
   while (pos < size) {
@@ -2605,7 +2605,7 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
   }
 
   // This entry point bypasses process(), so it owns the renderer lock itself.
-  std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
+  const aurora::TimedGpuLock gpuLock(aurora::GpuLockSite::RawDraw);
   select_native_vertices(false);
   NativeWheelArray* const nativeWheel = resolve_native_wheel(fmt, vertices, vtxCount, vtxSize);
   const DeindexPlan* plan = draw_deindex_plan(fmt);
@@ -3197,7 +3197,7 @@ static const NativeVertexChoice& native_vertex_choice(GXVtxFmt fmt) noexcept {
 void process_display_list(const uint8_t* data, uint32_t size) {
   ZoneScoped;
   // Everything below reads and records renderer state, as process() does.
-  std::lock_guard gpuLock(aurora::renderer_gpu_mutex());
+  const aurora::TimedGpuLock gpuLock(aurora::GpuLockSite::DisplayList);
   const auto plain = [&] { process(data, size, true); };
   // The cache needs de-indexed records and a buffer to keep them in (geometry_cache_mb 0 is the kill switch); 2D
   // lists stay out of it (their draws are the virtual screen's, matched by screen_rect and never merged while stereo

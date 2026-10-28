@@ -25,6 +25,9 @@
 #include <unistd.h>
 #include <vector>
 
+// aurora.cpp (lane AK): the renderer-lock waits and the frame worker's holds since the previous call, per game frame.
+extern "C" size_t aurora_lock_stats_line(char* out, size_t size, uint64_t frames, double seconds);
+
 namespace cpumon {
 namespace {
 
@@ -295,6 +298,11 @@ void MonitorLoop(pid_t gameTid) {
             }
         }
         if (hotZone != nullptr) out << " | hot " << std::setprecision(1) << hot / 1000.0 << " C " << hotZone->type;
+        {
+            // Appended last so the fields before keep their places for the existing readers.
+            char lockLine[640];
+            if (aurora_lock_stats_line(lockLine, sizeof(lockLine), df, dt) != 0) out << lockLine;
+        }
         RT_LOG(RT_TAG_RUNTIME) << out.str() << std::endl;
         last.swap(cur);
     }
