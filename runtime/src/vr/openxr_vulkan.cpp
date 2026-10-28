@@ -1050,7 +1050,7 @@ private:
         }
 
         VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-        application.pApplicationName = "WiiCompiled";
+        application.pApplicationName = "KartFrame";
         application.applicationVersion = 1;
         application.pEngineName = "Aurora OpenXR bridge";
         application.engineVersion = 1;

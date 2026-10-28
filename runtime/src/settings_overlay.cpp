@@ -2020,7 +2020,7 @@ void DrawDiagnosticsSettings() {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip(
             "Choose a folder, and the logs of recent sessions (the last four days, this one\n"
-            "included) are copied into a new WiiCompiled-logs folder there, together with\n"
+            "included) are copied into a new KartFrame-logs folder there, together with\n"
             "Config.toml. Zip that folder to attach it to a bug report.");
     }
     std::string message;
@@ -2124,9 +2124,9 @@ void DrawStartupScreen() {
                                         ImGuiWindowFlags_NoNav |
                                         ImGuiWindowFlags_NoSavedSettings |
                                         ImGuiWindowFlags_NoBringToFrontOnFocus;
-    if (ImGui::Begin("Wiicompiled Startup", nullptr, kFlags)) {
+    if (ImGui::Begin("KartFrame Startup", nullptr, kFlags)) {
         ImGui::SetWindowFontScale(1.25f);
-        constexpr const char* kTitle = "WiiCompiled";
+        constexpr const char* kTitle = "KartFrame";
         const ImVec2 titleSize = ImGui::CalcTextSize(kTitle);
         const float titleX = std::max(0.0f, (viewport->Size.x - titleSize.x) * 0.5f);
         const float startY = std::max(0.0f, (viewport->Size.y - titleSize.y) * 0.5f);
@@ -2193,7 +2193,7 @@ void DrawTopBar() {
     ImGui::End();
     if (!ImGui::BeginMainMenuBar()) return;
 
-    ImGui::TextUnformatted("WiiCompiled");
+    ImGui::TextUnformatted("KartFrame");
     ImGui::Separator();
     DrawResolutionMenu();
 
@@ -2375,8 +2375,8 @@ void DrawVrSettingsPanelWindow() {
     ImGui::SetNextWindowSize(viewport->Size, ImGuiCond_Always);
     constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    if (ImGui::Begin("WiiCompiled settings", nullptr, kFlags)) {
-        ImGui::TextUnformatted("WiiCompiled settings");
+    if (ImGui::Begin("KartFrame settings", nullptr, kFlags)) {
+        ImGui::TextUnformatted("KartFrame settings");
         const ImGuiStyle& style = ImGui::GetStyle();
         const float recenterWidth = ImGui::CalcTextSize("Recenter view").x + style.FramePadding.x * 2.0f;
         const float closeWidth = ImGui::CalcTextSize("Close").x + style.FramePadding.x * 2.0f;

@@ -465,7 +465,7 @@ void InitializeProcessTranscript(int argc, char** argv) {
 
     {
         std::lock_guard<std::mutex> lock(state.fileMutex);
-        state.file << "[runtime] WiiCompiled "
+        state.file << "[runtime] KartFrame "
                    << (setupVersion.empty() ? "version unknown" : setupVersion) << "\n";
         state.file << "[runtime] process transcript started\n";
         state.file << "[runtime] pid=" << pid << "\n";
@@ -813,9 +813,9 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) 
                 message.append("\n\n[Additional details were written to the crash log.]");
             }
         }
-        message.append("\n\nSee the WiiCompiled Logs folder for the full diagnostic.");
+        message.append("\n\nSee the KartFrame Logs folder for the full diagnostic.");
 #if defined(_WIN32)
-        ::MessageBoxA(nullptr, message.c_str(), "WiiCompiled - Fatal Error",
+        ::MessageBoxA(nullptr, message.c_str(), "KartFrame - Fatal Error",
                       MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TASKMODAL);
 #else
         // The shipped product is Windows-first. Keep non-Windows builds safe
