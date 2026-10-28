@@ -10,8 +10,13 @@
 # Environment (all optional; session.env below is the way to set them from the Steam library):
 #   KARTFRAME_HOME          data folder, default ~/.local/share/KartFrame (game/, build/, sessions/)
 #   KARTFRAME_REFRESH_HZ    refresh rate, 90 or 120: set as SteamVR's per-app rate and passed to the game (default:
-#                           [vr] refresh_rate of UserData/Config.toml, else 120). 90 Hz shows the game's 60 frames a
-#                           second 1.5 refreshes each (interpolated): it felt wrong to the owner; 120 is the default
+#                           [vr] refresh_rate of UserData/Config.toml, else 90). 90 is the default since session 24:
+#                           at 1728 per eye 120 Hz overruns the GPU (SteamVR skipped frames in bursts). 90 Hz shows
+#                           the game's 60 frames a second 1.5 refreshes each (interpolated)
+#   KARTFRAME_GX_THREAD     1 (default) runs the host side of GX on its own thread (game thread 13.2 -> 8.5 ms a
+#                           frame); 0 or off = the old single-thread path
+#   KARTFRAME_INTERP_MAX_MS ms of gap across which the interpolation keeps the previous frame (default 33: a missed
+#                           retrace glides instead of stepping); 0 or off = the game's own 1.5 intervals
 #   KARTFRAME_EYE_PX        per-eye size asked of SteamVR (resolutionOverride), 1024 to 4096 (default 1728, SteamVR's
 #                           Auto here; its 100 % is the panels' 2160). [vr] render_scale scales it
 #   KARTFRAME_RENDER_SCALE  one launch's [vr] render_scale (eyes = SteamVR's size x this; 1.25 = 2160 at 1728)
@@ -61,6 +66,15 @@ if [ "$EP" = off ] || [ "$EP" = 0 ]; then unset KARTFRAME_END_PHASE; log "KARTFR
 SP=${KARTFRAME_STEREO_PACKED:-1}
 if [ "$SP" = off ] || [ "$SP" = 0 ]; then export KARTFRAME_STEREO_PACKED=0; log "KARTFRAME_STEREO_PACKED=0: one swapchain per eye"; else export KARTFRAME_STEREO_PACKED=1; log "KARTFRAME_STEREO_PACKED=1: both eyes of a set in one swapchain"; fi
 
+# GX thread (the game reads KARTFRAME_GX_THREAD=0|1 only, anything else it ignores): on unless 0 or off.
+GXT=${KARTFRAME_GX_THREAD:-1}
+if [ "$GXT" = off ] || [ "$GXT" = 0 ]; then export KARTFRAME_GX_THREAD=0; log "KARTFRAME_GX_THREAD=0: GX on the game thread"; else export KARTFRAME_GX_THREAD=1; log "KARTFRAME_GX_THREAD=1: GX thread on (0 turns it off)"; fi
+# Interpolation window: 33 ms unless set (a number of ms) or 0 / off. Read by the renderer, 1 to 100 ms.
+IM=${KARTFRAME_INTERP_MAX_MS:-33}
+if [ "$IM" = off ] || [ "$IM" = 0 ]; then unset KARTFRAME_INTERP_MAX_MS; log "KARTFRAME_INTERP_MAX_MS=off: previous frame kept across 1.5 intervals only"
+elif [[ "$IM" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then export KARTFRAME_INTERP_MAX_MS=$IM; log "KARTFRAME_INTERP_MAX_MS=$IM (0 turns it off)"
+else log "KARTFRAME_INTERP_MAX_MS=$IM is not a number of ms, using 33"; export KARTFRAME_INTERP_MAX_MS=33; fi
+
 # The game: Steam's %command% (the binary the shortcut names), else the installed one.
 EXE=${KARTFRAME_EXE:-${1:-$KFHOME/bin/kartframe}}
 [ $# -gt 0 ] && shift
@@ -108,9 +122,9 @@ if [ -z "$HZ" ]; then
     HZ_FROM="Config.toml [vr] refresh_rate"
     HZ=$(awk -F= '/^[ \t]*\[/ { vr = ($0 ~ /^[ \t]*\[vr\][ \t]*$/) } vr && $1 ~ /^[ \t]*refresh_rate[ \t]*$/ {
         v = $2; sub(/#.*/, "", v); gsub(/[ \t"]/, "", v); print v; exit }' "$STATE/Config.toml" 2> /dev/null)
-    [ -n "$HZ" ] || { HZ_FROM=default; HZ=120; }
+    [ -n "$HZ" ] || { HZ_FROM=default; HZ=90; }
 fi
-case "$HZ" in 90 | 90.0 | 120 | 120.0) HZ=${HZ%.0} ;; *) log "refresh rate $HZ ($HZ_FROM) is not 90 or 120, using 120"; HZ=120 HZ_FROM=default ;; esac
+case "$HZ" in 90 | 90.0 | 120 | 120.0) HZ=${HZ%.0} ;; *) log "refresh rate $HZ ($HZ_FROM) is not 90 or 120, using 90"; HZ=90 HZ_FROM=default ;; esac
 export KARTFRAME_REFRESH_HZ=$HZ
 log "refresh rate $HZ Hz ($HZ_FROM)"
 # The per-eye size SteamVR gives the game (its recommended view size); the game multiplies it by render_scale.

@@ -20,6 +20,12 @@ and the release notes. Twenty headset sessions have confirmed most of the build;
 - 90 Hz through `[vr] refresh_rate = 90` (the wrapper now passes it to SteamVR and the game) and the end lock
   following a 90 Hz compositor grid: code read only, not run.
 
+## Performance defaults (session 24)
+
+- The GX thread (`KARTFRAME_GX_THREAD=1`, the wrapper default now) over full 3-lap races: three short launches (57 to 76 s races) were clean, none went the distance.
+- 90 Hz as the default: how it feels over a full race (the owner played short races at 90 Hz in session 24; 120 Hz is still optional).
+- `KARTFRAME_INTERP_MAX_MS=33` over full races (no artefact seen in one short launch).
+
 ## Screen and menus
 
 - The laser pointer's dot on the 2D menu screen (the ray shows, the dot on the screen does not yet).

@@ -9,7 +9,7 @@ You need your own Mario Kart Wii disc. No game data is in this repository or its
 What it does:
 
 - Plays Mario Kart Wii in VR on the Steam Frame, in the Frame's SteamVR.
-- Renders both eyes on every refresh of the 120 Hz display, from your head position at that refresh, at 1728 pixels per eye.
+- Renders both eyes on every refresh of the display (90 Hz by default, 120 Hz optional), from your head position at that refresh, at 1728 pixels per eye.
 - Uses the Steam Frame controllers through SteamVR's own controller profile.
 - Builds the game on your Frame from your own disc, once, in about 6 minutes.
 
@@ -28,13 +28,15 @@ Upstream runs on Windows and on the Meta Quest. On the Frame that would mean Lep
 - Simplified models of the Frame's controllers, converted at install from the Frame's own SteamVR files.
 - The game's 2D screen shown as a flat quad layer in front of you.
 - A first run that extracts your disc, translates the game and compiles it on the Frame with a bundled compiler, using a kit of prebuilt runtime parts.
-- A launch wrapper that sets SteamVR's per-app settings (120 Hz, no throttling, no extra prediction, motion smoothing off, 1728 resolution) at every launch and writes a session log folder.
+- A launch wrapper that sets SteamVR's per-app settings (90 Hz, no throttling, no extra prediction, motion smoothing off, 1728 resolution) at every launch and writes a session log folder.
 
 ## Status
 
-Version 0.9.0-alpha.1 is a pre-release. It plays, at 120 Hz and 1728 pixels per eye, through twenty headset sessions so far. Version numbers stay below 1.0.0 until the double image (next section) is fixed at its cause rather than worked around.
+Version 0.9.0-alpha.1 is a pre-release. It plays, at 1728 pixels per eye, through twenty-four headset sessions so far (120 Hz until session 24, 90 Hz by default since). Version numbers stay below 1.0.0 until the double image (next section) is fixed at its cause rather than worked around.
 
 Confirmed in the headset: the native build in SteamVR; 119 to 120 sets of eyes a second in races with under 1 % late; the game at its full 60 frames a second; the menus as a steady flat screen; the race HUD on the virtual screen with correct clipping; the Frame controls, hand steering and the controller models; the first run from a disc; the installer, the library entry, the launch wrapper and the session logs.
+
+Grand Prix speed: the game used to run at 48 to 50 frames a second in Grand Prix races. Since session 24 it is on a second thread for the graphics work (the GX thread, on by default) and holds 57 to 60 frames a second, with the 90 Hz default. It is improved, not finished: heavy sections of a course still slow down a little, and I am looking into why. 120 Hz is optional (`KARTFRAME_REFRESH_HZ=120`): the GPU overruns its time at 1728 per eye and SteamVR drops frames in bursts.
 
 Known issues: the Time Trial ghost is flat; full-view 2D effects such as Blooper ink do not cover the whole view; the laser pointer's dot is not visible on the 2D menu screen (the ray is); two and four player races are heavier and not yet measured in the headset. The short list of what is built but not yet confirmed is in [frame/UNTESTED.md](frame/UNTESTED.md).
 
@@ -138,7 +140,7 @@ Hold left View for half a second. The VR settings panel opens. Everything on it 
 | `[vr] render_scale` | 1.0 | Eye size relative to the size SteamVR gives the game: 1728 per eye, what the wrapper asks for (SteamVR's Auto setting on the Frame picks the same; SteamVR's 100 % is 2160, the panel's own resolution). 1.111 is 1920, 1.185 is 2048, 1.25 is 2160. The panel's "Resolution per eye" slider writes it; it applies at the next launch. Above 1.0 costs GPU time, see Performance |
 | `[vr] frame_interpolation_fps` | 1 | 1 renders at the headset's refresh rate, interpolated from the game's 60 frames a second |
 | `[vr] frame_pacing` | `"auto"` | `auto`, `inline` or `pipelined`. Auto picks pipelined |
-| `[vr] refresh_rate` | 120 | 120 or 90. The launch wrapper sets it as SteamVR's rate for this game at every launch, and the game follows. At 90 Hz each of the game's 60 frames a second spans 1.5 refreshes instead of 2 (interpolated); that felt less smooth to me, so 120 is the default |
+| `[vr] refresh_rate` | 90 | 90 or 120. The launch wrapper sets it as SteamVR's rate for this game at every launch, and the game follows. 90 is the default since session 24: at 1728 per eye the GPU overruns 120 Hz and SteamVR skips frames in bursts. At 90 Hz each of the game's 60 frames a second spans 1.5 refreshes instead of 2 (interpolated). A Config.toml from an older install keeps its own `refresh_rate = 120` until you change it |
 | `[vr] menu_shader_quality` | 0 | 0 is a plain dark background behind the menus |
 | `[vr] hand_steering` | true | Grips hold the wheel in the first-person cockpit |
 | `[vr] cockpit_item_hand` | `"right"` | The hand that holds your item in the first-person cockpit (`"left"`, `"right"` or `"off"`), and the hand whose swing throws it |
@@ -156,7 +158,9 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | Name | What it does |
 |---|---|
 | `KARTFRAME_PACING` | `auto`, `inline` or `pipelined`, overriding the config |
-| `KARTFRAME_REFRESH_HZ` | 90 or 120 for this launch, instead of `[vr] refresh_rate` |
+| `KARTFRAME_REFRESH_HZ` | 90 or 120 for this launch, instead of `[vr] refresh_rate` (default 90) |
+| `KARTFRAME_GX_THREAD` | `1` (default) runs the game's graphics work on its own thread: game-thread CPU 13.2 to 8.5 ms a frame, 8 to 11 frames a second more in Grand Prix. `0` or `off` goes back to one thread, to compare |
+| `KARTFRAME_INTERP_MAX_MS` | Milliseconds of gap across which the interpolation keeps the previous frame (default 33, so one missed retrace glides instead of stepping; sets drawn without a previous frame went from 4.9 % to 0). `0` or `off` goes back to the game's own 1.5 intervals |
 | `KARTFRAME_EYE_PX` | The per-eye size the wrapper asks of SteamVR, 1024 to 4096 (default 1728; SteamVR's 100 % is 2160); `render_scale` multiplies it |
 | `KARTFRAME_RENDER_SCALE` | `render_scale` for this launch, e.g. 1.25 for 2160 per eye |
 | `KARTFRAME_SYSMEM` | 0 turns off the GPU's direct memory rendering mode (`TU_DEBUG=sysmem`); it is on by default |
@@ -175,7 +179,7 @@ Measured on my Frame, from the session logs:
 
 | | |
 |---|---|
-| Display | 120 Hz, 1728 x 1728 per eye |
+| Display | 90 Hz (120 Hz optional), 1728 x 1728 per eye |
 | Races | 119 to 120 sets of eyes a second, 0.2 to 1 % late, 2 to 3 % retained repeats |
 | Menus | 110 to 113 sets a second (the quad layer and the intro screens) |
 | GPU per set | about 5 ms in races (about 7 with the hand-over timing of this build, since the next set starts before the hand-over), 1.5 to 2.5 ms in menus |

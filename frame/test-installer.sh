@@ -128,7 +128,7 @@ SH
 cat > "$W/home/bin/kartframe" << 'SH'
 #!/bin/bash
 D=$(dirname "$0")/../UserData/Logs/run1; mkdir -p "$D"; [ -f "$(dirname "$0")/../portable.txt" ] || echo "NO PORTABLE" > "$D/bad"
-{ echo "env FDM=$DISABLE_VULKAN_FDM_INJECTION_LAYER TU=$TU_DEBUG PACING=$KARTFRAME_PACING HZ=$KARTFRAME_REFRESH_HZ SCALE=$KARTFRAME_RENDER_SCALE"; echo "args: $*"; } > "$D/console.log"
+{ echo "env FDM=$DISABLE_VULKAN_FDM_INJECTION_LAYER TU=$TU_DEBUG PACING=$KARTFRAME_PACING HZ=$KARTFRAME_REFRESH_HZ SCALE=$KARTFRAME_RENDER_SCALE GX=$KARTFRAME_GX_THREAD IM=$KARTFRAME_INTERP_MAX_MS"; echo "args: $*"; } > "$D/console.log"
 echo "game stdout"; sleep 3
 SH
 chmod +x "$W/bin/vrcmd" "$W/home/bin/kartframe" "$W/app/kartframe.sh"
@@ -137,7 +137,7 @@ run() { env PATH="$W/bin:$PATH" SteamAppId=4242 "$@" "$W/app/kartframe.sh" "$W/h
 run
 S=$KARTFRAME_HOME/sessions/latest
 check "wrapper exits with the game's status" test "$(cat "$W/rc")" = 0
-for k in preferredRefreshRate=120 framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2 resolutionOverride=1728; do
+for k in preferredRefreshRate=90 framesToThrottle=0 additionalFramesToPredict=0 motionSmoothingOverride=2 resolutionOverride=1728; do
     check "vrcmd --set-settings-int steam.app.4242.${k%=*} ${k#*=}" has "$W/vrcmd.log" "^--set-settings-int steam.app.4242.${k%=*} ${k#*=}\$"
 done
 check "read-back logged as matching" has "$S/launch.log" "read-back: 5 of 5"
@@ -150,7 +150,21 @@ check "wrapper never uses WiiCompiled/XDG" test ! -e "$XDG_DATA_HOME/WiiCompiled
 check "Config.toml seeded with the game path" has "$KARTFRAME_HOME/UserData/Config.toml" "dvd_root = \"$KARTFRAME_HOME/game/DATA\""
 check "vrtiming logger stopped at exit" test -z "$(pgrep -f "$W/app/tools/vrtiming.py")"
 check "defaults: sysmem on, no other switches" has "$S/game.log" "env FDM= TU=sysmem PACING="
-check "defaults: 120 Hz handed to the game, no render_scale override" has "$S/game.log" "PACING= HZ=120 SCALE=$"
+check "defaults: 90 Hz handed to the game, no render_scale override" has "$S/game.log" "PACING= HZ=90 SCALE= "
+check "defaults: GX thread on, interpolation window 33 ms" has "$S/game.log" "GX=1 IM=33$"
+check "defaults logged" has "$S/launch.log" "KARTFRAME_GX_THREAD=1: GX thread on"
+sleep 1
+run KARTFRAME_GX_THREAD=0 KARTFRAME_INTERP_MAX_MS=0
+check "KARTFRAME_GX_THREAD=0 turns the GX thread off, INTERP_MAX_MS=0 the window" has "$S/game.log" "GX=0 IM=$"
+sleep 1
+run KARTFRAME_GX_THREAD=off KARTFRAME_INTERP_MAX_MS=50
+check "GX thread off spelled out, window 50" has "$S/game.log" "GX=0 IM=50$"
+sleep 1
+run KARTFRAME_GX_THREAD=1 KARTFRAME_INTERP_MAX_MS=junk
+check "a bad window falls back to 33" has "$S/game.log" "GX=1 IM=33$"
+sleep 1
+run KARTFRAME_REFRESH_HZ=120
+check "KARTFRAME_REFRESH_HZ=120 overrides the 90 default" has "$S/game.log" "HZ=120 "
 sleep 1
 run KARTFRAME_SYSMEM=0
 check "KARTFRAME_SYSMEM=0 turns sysmem off" has "$S/game.log" "env FDM= TU= PACING="
@@ -169,18 +183,18 @@ check "90 Hz choice applied" has "$W/vrcmd.log" "preferredRefreshRate 90"
 check "session.env deleted after use, copy kept" test ! -f "$KARTFRAME_HOME/session.env" -a -f "$S/session.env"
 sleep 1
 # refresh rate from the config, eye size and render_scale switches (lane AG)
-sed -i 's/^refresh_rate = .*/refresh_rate = 90/' "$KARTFRAME_HOME/UserData/Config.toml"; : > "$FAKE_VRCMD_LOG"
+sed -i 's/^refresh_rate = .*/refresh_rate = 120/' "$KARTFRAME_HOME/UserData/Config.toml"; : > "$FAKE_VRCMD_LOG"
 run KARTFRAME_EYE_PX=2048 KARTFRAME_RENDER_SCALE=1.25
 S=$KARTFRAME_HOME/sessions/latest
-check "Config.toml refresh_rate 90 reaches SteamVR" has "$W/vrcmd.log" "preferredRefreshRate 90"
-check "and the game" has "$S/game.log" "HZ=90 SCALE=1.25"
+check "Config.toml refresh_rate 120 reaches SteamVR" has "$W/vrcmd.log" "preferredRefreshRate 120"
+check "and the game" has "$S/game.log" "HZ=120 SCALE=1.25"
 check "KARTFRAME_EYE_PX sets SteamVR's size" has "$W/vrcmd.log" "resolutionOverride 2048"
 sleep 1
 : > "$FAKE_VRCMD_LOG"; run KARTFRAME_EYE_PX=big KARTFRAME_REFRESH_HZ=75
 S=$KARTFRAME_HOME/sessions/latest
 check "a bad eye size falls back to 1728" has "$W/vrcmd.log" "resolutionOverride 1728"
-check "a bad rate falls back to 120 (env wins over the config)" has "$S/game.log" "HZ=120"
-sed -i 's/^refresh_rate = .*/refresh_rate = 120/' "$KARTFRAME_HOME/UserData/Config.toml"
+check "a bad rate falls back to 90 (env wins over the config)" has "$S/game.log" "HZ=90"
+sed -i 's/^refresh_rate = .*/refresh_rate = 90/' "$KARTFRAME_HOME/UserData/Config.toml"
 sleep 1
 # kit check
 mkdir -p "$W/app/kit"; echo '{"fingerprint":"kitA"}' > "$W/app/kit/kit.json"; echo kitB > "$W/home/bin/kartframe.fingerprint"
