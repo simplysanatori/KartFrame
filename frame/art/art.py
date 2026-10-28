@@ -9,7 +9,7 @@ Writes <appid>p.png (portrait), <appid>.png (wide), <appid>_hero.png, <appid>_lo
 Anything it replaces is first copied to ~/.local/share/icon-backups/kartframe-<date>/.
 
 The set in frame/art/set is entirely our own artwork (the KartFrame logo over a drawn backdrop).
-With a SteamGridDB API key ($SGDB_API_KEY or ~/.config/steamgriddb/api_key) and ffmpeg, the
+With a SteamGridDB API key ($SGDB_API_KEY, or the file api_key in ~/.config/steamgriddb) and ffmpeg, the
 portrait, wide and hero are instead made from SteamGridDB's Mario Kart Wii key art (the ids are in
 CREDITS.md) with the KartFrame logo laid over it; the art is downloaded here and never shipped.
 Any failure falls back to the shipped set.
@@ -31,7 +31,7 @@ def log(*a):
 
 def sgdb_key():
     k = os.environ.get('SGDB_API_KEY', '').strip()
-    p = os.path.join(HOME, '.config/steamgriddb/api_key')
+    p = os.path.join(HOME, '.config', 'steamgriddb', 'api_key')
     if not k and os.path.exists(p):
         k = open(p).read().strip()
     return k

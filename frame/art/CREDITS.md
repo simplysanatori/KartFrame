@@ -22,4 +22,4 @@ Other assets looked at and not used: grid 730655 (Foxee17, text-free portrait on
 and wide on SteamGridDB carries the Nintendo logo or third-party text, so none was used.
 
 Without a key or without ffmpeg, `art.py` installs the shipped set instead. Without `--sgdb yes`
-nothing is downloaded unless a key is found in `$SGDB_API_KEY` or `~/.config/steamgriddb/api_key`.
+nothing is downloaded unless a key is found in `$SGDB_API_KEY` or in the file `api_key` in `~/.config/steamgriddb`.
