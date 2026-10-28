@@ -17,6 +17,8 @@
 #                           frame); 0 or off = the old single-thread path
 #   KARTFRAME_INTERP_MAX_MS ms of gap across which the interpolation keeps the previous frame (default 33: a missed
 #                           retrace glides instead of stepping); 0 or off = the game's own 1.5 intervals
+#   KARTFRAME_WORKER_LOCK   narrow (default since session 25) holds the renderer lock only for a refresh set's setup
+#                           (Grand Prix 53.9 -> 60.0 fps on the headset); full = the whole set under the lock, as before
 #   KARTFRAME_EYE_PX        per-eye size asked of SteamVR (resolutionOverride), 1024 to 4096 (default 1728, SteamVR's
 #                           Auto here; its 100 % is the panels' 2160). [vr] render_scale scales it
 #   KARTFRAME_RENDER_SCALE  one launch's [vr] render_scale (eyes = SteamVR's size x this; 1.25 = 2160 at 1728)
@@ -74,6 +76,10 @@ IM=${KARTFRAME_INTERP_MAX_MS:-33}
 if [ "$IM" = off ] || [ "$IM" = 0 ]; then unset KARTFRAME_INTERP_MAX_MS; log "KARTFRAME_INTERP_MAX_MS=off: previous frame kept across 1.5 intervals only"
 elif [[ "$IM" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then export KARTFRAME_INTERP_MAX_MS=$IM; log "KARTFRAME_INTERP_MAX_MS=$IM (0 turns it off)"
 else log "KARTFRAME_INTERP_MAX_MS=$IM is not a number of ms, using 33"; export KARTFRAME_INTERP_MAX_MS=33; fi
+# Frame worker lock (the game reads KARTFRAME_WORKER_LOCK=narrow only; anything else is the full lock): narrow unless full.
+WL=${KARTFRAME_WORKER_LOCK:-narrow}
+if [ "$WL" = full ]; then export KARTFRAME_WORKER_LOCK=full; log "KARTFRAME_WORKER_LOCK=full: refresh sets hold the renderer lock throughout"
+else [ "$WL" = narrow ] || log "KARTFRAME_WORKER_LOCK=$WL is not narrow or full, using narrow"; export KARTFRAME_WORKER_LOCK=narrow; log "KARTFRAME_WORKER_LOCK=narrow (full holds the lock for the whole set)"; fi
 
 # The game: Steam's %command% (the binary the shortcut names), else the installed one.
 EXE=${KARTFRAME_EXE:-${1:-$KFHOME/bin/kartframe}}

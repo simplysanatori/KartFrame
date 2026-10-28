@@ -25,6 +25,7 @@ and the release notes. Twenty headset sessions have confirmed most of the build;
 - The GX thread (`KARTFRAME_GX_THREAD=1`, the wrapper default now) over full 3-lap races: three short launches (57 to 76 s races) were clean, none went the distance.
 - 90 Hz as the default: how it feels over a full race (the owner played short races at 90 Hz in session 24; 120 Hz is still optional).
 - `KARTFRAME_INTERP_MAX_MS=33` over full races (no artefact seen in one short launch).
+- `KARTFRAME_WORKER_LOCK=narrow` (the wrapper default since session 25) over long sessions: two launches of about two minutes of driving each were clean (0 faults, 0 late sets, no visual fault); a session of many races, and the heaviest courses (560+ draws a frame while driving), not yet.
 
 ## Screen and menus
 

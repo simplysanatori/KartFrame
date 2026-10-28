@@ -99,7 +99,7 @@ SteamVR (its skips happened only behind the dashboard, in 01 as much as in 02). 
 heavier (508 draws against 481-486), but the still-frame A/B removes that: 47.6 against 59.9 fps on the same image.
 
 **(3) Anything new or worse with narrow?** No. Both narrow launches have exactly the control's start-up warnings and
-nothing new (their only lines the control lacks are the lock mode and a Bullet Bill camera note; the control alone had a desktop-window swapchain re-creation); 0 GX faults, 0 late sets, 0
+nothing new (their only lines the control lacks are the lock mode and a vanilla-camera note for one item; the control alone had a Gamescope WSI swapchain re-creation); 0 GX faults, 0 late sets, 0
 repeats, 0 SteamVR skips while driving, 0 sets without a previous frame. The DONE wait appeared as the mock said: 0.22
 (01) and 0.03 (03) ms a frame. The set encode is 3.37 / 4.11 ms against 3.78 (no trend), GPU per set unchanged. The owner
 saw no visual fault in either narrow launch.

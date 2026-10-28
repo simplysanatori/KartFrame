@@ -128,7 +128,7 @@ SH
 cat > "$W/home/bin/kartframe" << 'SH'
 #!/bin/bash
 D=$(dirname "$0")/../UserData/Logs/run1; mkdir -p "$D"; [ -f "$(dirname "$0")/../portable.txt" ] || echo "NO PORTABLE" > "$D/bad"
-{ echo "env FDM=$DISABLE_VULKAN_FDM_INJECTION_LAYER TU=$TU_DEBUG PACING=$KARTFRAME_PACING HZ=$KARTFRAME_REFRESH_HZ SCALE=$KARTFRAME_RENDER_SCALE GX=$KARTFRAME_GX_THREAD IM=$KARTFRAME_INTERP_MAX_MS"; echo "args: $*"; } > "$D/console.log"
+{ echo "env FDM=$DISABLE_VULKAN_FDM_INJECTION_LAYER TU=$TU_DEBUG PACING=$KARTFRAME_PACING HZ=$KARTFRAME_REFRESH_HZ SCALE=$KARTFRAME_RENDER_SCALE GX=$KARTFRAME_GX_THREAD IM=$KARTFRAME_INTERP_MAX_MS WL=$KARTFRAME_WORKER_LOCK"; echo "args: $*"; } > "$D/console.log"
 echo "game stdout"; sleep 3
 SH
 chmod +x "$W/bin/vrcmd" "$W/home/bin/kartframe" "$W/app/kartframe.sh"
@@ -151,17 +151,19 @@ check "Config.toml seeded with the game path" has "$KARTFRAME_HOME/UserData/Conf
 check "vrtiming logger stopped at exit" test -z "$(pgrep -f "$W/app/tools/vrtiming.py")"
 check "defaults: sysmem on, no other switches" has "$S/game.log" "env FDM= TU=sysmem PACING="
 check "defaults: 90 Hz handed to the game, no render_scale override" has "$S/game.log" "PACING= HZ=90 SCALE= "
-check "defaults: GX thread on, interpolation window 33 ms" has "$S/game.log" "GX=1 IM=33$"
+check "defaults: GX thread on, interpolation window 33 ms, narrow worker lock" has "$S/game.log" "GX=1 IM=33 WL=narrow$"
+check "worker lock default logged" has "$S/launch.log" "KARTFRAME_WORKER_LOCK=narrow"
 check "defaults logged" has "$S/launch.log" "KARTFRAME_GX_THREAD=1: GX thread on"
 sleep 1
 run KARTFRAME_GX_THREAD=0 KARTFRAME_INTERP_MAX_MS=0
-check "KARTFRAME_GX_THREAD=0 turns the GX thread off, INTERP_MAX_MS=0 the window" has "$S/game.log" "GX=0 IM=$"
+check "KARTFRAME_GX_THREAD=0 turns the GX thread off, INTERP_MAX_MS=0 the window" has "$S/game.log" "GX=0 IM= WL=narrow$"
 sleep 1
-run KARTFRAME_GX_THREAD=off KARTFRAME_INTERP_MAX_MS=50
-check "GX thread off spelled out, window 50" has "$S/game.log" "GX=0 IM=50$"
+run KARTFRAME_GX_THREAD=off KARTFRAME_INTERP_MAX_MS=50 KARTFRAME_WORKER_LOCK=full
+check "GX thread off spelled out, window 50, full worker lock" has "$S/game.log" "GX=0 IM=50 WL=full$"
+check "full worker lock logged" has "$S/launch.log" "KARTFRAME_WORKER_LOCK=full"
 sleep 1
-run KARTFRAME_GX_THREAD=1 KARTFRAME_INTERP_MAX_MS=junk
-check "a bad window falls back to 33" has "$S/game.log" "GX=1 IM=33$"
+run KARTFRAME_GX_THREAD=1 KARTFRAME_INTERP_MAX_MS=junk KARTFRAME_WORKER_LOCK=junk
+check "a bad window falls back to 33, a bad lock mode to narrow" has "$S/game.log" "GX=1 IM=33 WL=narrow$"
 sleep 1
 run KARTFRAME_REFRESH_HZ=120
 check "KARTFRAME_REFRESH_HZ=120 overrides the 90 default" has "$S/game.log" "HZ=120 "
