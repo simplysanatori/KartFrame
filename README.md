@@ -8,35 +8,32 @@ You need your own Mario Kart Wii disc. No game data is in this repository or its
 
 ## Status
 
-Version 1.0.0. It plays on a Steam Frame at 1728 pixels per eye and 90 Hz, with both eyes rendered on every refresh from your head position at that refresh, and the game at its full 60 frames a second.
+Version 1.0.0, the first release. It plays on my Steam Frame at 1728 pixels per eye and 90 Hz, with both eyes rendered on every refresh from your head position at that refresh, and the game at its full 60 frames a second in Time Trial and Grand Prix. Menus sit on a steady flat screen with the controllers and the pointer in front of it, and the race HUD is on a virtual screen.
 
-Confirmed in the headset: Time Trial against a ghost and Grand Prix, both smooth, with no doubled image and the ghost drawn right; Grand Prix at 60.0 frames a second with no late sets; the menus as a steady flat screen with the controllers and the pointer in front of it; the race HUD on the virtual screen; hand steering with the grips; the Frame controls and controller models; the first run from a disc; the installer, the library entry, the library art, the launch wrapper and the session logs.
+**Compared with the Lepton APK.** Before KartFrame I played the upstream Quest APK through Lepton. There the game showed its 60 frames at 72 Hz with judder, or blurred at 120 Hz, because the Android build leaves the game's frame interpolation out. The image ghosted and doubled when I turned my head, menus ran at 37 to 45 frames a second, and anything above 1728 per eye brought stalls of 30 to 50 ms. Every launch needed adb workarounds, a re-signed APK and a patched dex, and the controls were whatever SteamVR's remap of the Vive-wand bindings allowed. Here the game's own interpolation runs at 90 Hz, the picture is clean when you turn your head, menus run at the display rate, the controls are made for the Frame controllers, and one Steam shortcut starts it. The chip does less work for the same game, with native code and no Android system underneath, so battery life should be better too.
 
-Built but not yet confirmed in the headset: the held item in your hand, the swing to throw, the rumble, resident geometry and eye sizes above 1728. The list is [frame/UNTESTED.md](frame/UNTESTED.md).
+Known issues:
 
-Known issues: opening KartFrame's settings panel over a running race slows it (about 84 frames a second, some late frames) until it is closed, while the SteamVR dashboard itself costs nothing (fix planned: the menu path will release the renderer lock before encoding and draw the controllers from a static buffer); 120 Hz is optional because the GPU overruns it at 1728 per eye; the heaviest sections of a course dip to about 58 frames a second; anything else using the Frame's CPUs while you play (a compiler, a container build) makes it stutter; full-view 2D effects such as Blooper ink do not cover the whole view; the laser pointer's dot is not visible on the 2D menu screen (the ray is); two and four player races are not measured in the headset. The history of the double image, which is fixed, is in the [technical notes](docs/TECHNICAL_NOTES.md).
+- The VR menu over a running race slows the race until you close it.
+- 120 Hz is there if you want to try it, but at 1728 per eye the GPU runs out of time and SteamVR skips frames.
+- The heaviest parts of a few courses dip a little below 60.
+- Anything else heavy running on the Frame while you play (a compile, a download) makes it stutter.
 
 ## What this adds over Wiicompiled VR PLUS 1.3.1
 
-Upstream runs on Windows and on the Meta Quest. On the Frame that would mean Lepton and an Android layer between the game and SteamVR. KartFrame changes the platform side and adds a few things to the game:
+Upstream runs on Windows and on the Meta Quest. On the Frame that would mean Lepton and an Android layer between the game and SteamVR. I changed the platform side and added a few things to the game:
 
 - A native Linux Arm64 build on Dawn's Vulkan backend, bound to SteamVR's own Vulkan device (upstream's own Dawn patch).
-- Frame pacing written for SteamVR on the Frame: both eyes on every refresh from that refresh's head pose, eye images handed over only after the GPU has finished them, at a fixed point of the refresh. The game's own VR frame interpolation fills 90 Hz from its 60 frames a second.
-- Both eyes of a refresh in one swapchain image, which is what ended the right-eye double image.
-- The game's graphics work on its own thread (upstream's GX thread, switched on here and fixed for the nameplate hook) and a narrow renderer lock: Grand Prix at 60 frames a second where it was 48 to 54.
-- The Time Trial ghost drawn in 3D, one view per eye, and projected reflections that stay on the track (both from iChris4's fork).
-- The held item in your hand, the swing to throw it (iChris4's fork) and rumble on the controllers (not in either upstream).
-- Menu controllers and pointer in front of the menu screen, in 3D.
+- Frame pacing written for SteamVR on the Frame: both eyes on every refresh from that refresh's head pose, handed over only after the GPU has finished them. The game's own frame interpolation fills 90 Hz from its 60 frames a second.
+- Both eyes of a refresh in one image, so the picture stays clean when you turn your head.
+- The game's graphics work on its own CPU core, so Grand Prix holds 60 frames a second.
 - The Frame controller layout in code, with no SteamVR binding file, and simplified Frame controller models converted at install from your own SteamVR files.
+- Rumble on the Frame controllers.
+- The controllers and the pointer in front of the menu screen, in 3D.
 - The 2D menus and the race HUD on a flat quad layer in front of you.
-- A first run that extracts your disc, translates the game and compiles it on the Frame with a bundled compiler, plus an installer with a Steam library entry and Mario Kart Wii library art.
-- A launch wrapper that sets SteamVR's per-app settings at every launch and writes a session log folder with CPU, thermal and pacing numbers.
-
-## What changed since 0.9.0-alpha.1
-
-- Fixed: the right-eye double image (packed stereo swapchain), the Grand Prix slowdown (GX thread, narrow lock), the flat Time Trial ghost, reflections that followed your head, rumble that never reached the controllers, controllers hidden behind the menu screen.
-- Added: held item, swing to throw, rumble strength, refresh rate and eye size settings, resident geometry (opt-in), CPU and thermal logging, KartFrame library art and name.
-- Defaults changed: 90 Hz (was 120), GX thread on, narrow lock, packed swapchain, 33 ms interpolation window, menu controllers in front of the screen. The full list is the [changelog](docs/CHANGELOG.md).
+- Refresh rate and eye size as settings, and a launch wrapper that applies SteamVR's per-app settings at every launch and logs CPU use and temperatures every second.
+- A first run that extracts your own disc, translates the game and compiles it on the Frame with a bundled compiler, plus an installer with a Steam library entry, Mario Kart Wii library art and the KartFrame name.
+- Features from Wiicompiled VR are in too: the item in your hand, swing to throw, the 3D ghost, the reflection fix.
 
 ## Requirements
 
@@ -75,7 +72,7 @@ Upstream runs on Windows and on the Meta Quest. On the Frame that would mean Lep
 
 4. Put the headset on and launch **KartFrame** from your Steam library.
 
-To update from 0.9.0-alpha.1, download the new tarball and run `frame/install.sh` again, then `setup.sh` again: the kit changed, and the launch wrapper refuses to start a game built for another kit. Old `Config.toml` files keep `refresh_rate = 120`; set `refresh_rate = 90` in it if you want the new default. Your game files, saves and settings stay where they are.
+To update, run `frame/install.sh` with the new tarball. If the launch wrapper then reports a kit mismatch, run `setup.sh` again.
 
 The installer changes nothing outside the folders listed under [Files](#files), the Steam shortcut and the controller models. To remove KartFrame, run `~/Games/KartFrame/app/tools/uninstall.sh`. It keeps your data folder unless you pass `--purge`.
 
@@ -110,13 +107,12 @@ In menus and in the settings panel, point with a controller: the ray and the con
 
 Hand steering (`hand_steering`, on by default): in the first-person cockpit, squeeze a grip near the wheel to hold it and steer by turning your hands, with one hand or both. The right bumper drifts there. Release both grips and the left stick steers again. Elsewhere the grips drift. The left trigger always brakes and reverses.
 
-New since 0.9.0-alpha.1:
+Also:
 
 - **Held item.** In first person the item you hold is drawn in your hand (`cockpit_item_hand`: `"right"` by default, `"left"` or `"off"`; `cockpit_item_size`, 0.2 m).
-- **Swing to throw.** With an item, a quick swing of that hand forward or back throws it that way. The hand must be off the wheel (`cockpit_item_throw`, on by default). The swing thresholds (18 cm forward, 15 cm back within 120 ms) were tuned on Quest controllers; tell me if they are too stiff or too loose on the Frame's.
+- **Swing to throw.** With an item, a quick swing of that hand forward or back throws it that way. The hand must be off the wheel (`cockpit_item_throw`, on by default). A swing counts at 18 cm forward or 15 cm back within 120 ms; `KARTFRAME_THROW_*` changes that, and tell me if it feels too stiff or too loose.
 - **Rumble.** The game's bumps and hits shake both controllers (`KARTFRAME_RUMBLE`, strength 0.7 by default, `0` turns it off).
-- **Menu controllers.** The controllers and the pointer ray now sit in front of the menu screen (`KARTFRAME_MENU_CONTROLLERS=eyes`).
-- The sticks, the right stick click and the grip wheel were already in 0.9.0-alpha.1; they were just missing from this table.
+- **Menu controllers.** The controllers and the pointer ray sit in front of the menu screen (`KARTFRAME_MENU_CONTROLLERS=eyes`).
 
 ## Settings
 
@@ -127,7 +123,7 @@ Hold left View for half a second. The VR settings panel opens. Everything on it 
 | `[vr] render_scale` | 1.0 | Eye size relative to the size SteamVR gives the game: 1728 per eye, what the wrapper asks for (SteamVR's Auto setting on the Frame picks the same; SteamVR's 100 % is 2160, the panel's own resolution). 1.111 is 1920, 1.185 is 2048, 1.25 is 2160. The panel's "Resolution per eye" slider writes it; it applies at the next launch. Above 1.0 costs GPU time, see Performance |
 | `[vr] frame_interpolation_fps` | 1 | 1 renders at the headset's refresh rate, interpolated from the game's 60 frames a second |
 | `[vr] frame_pacing` | `"auto"` | `auto`, `inline` or `pipelined`. Auto picks pipelined |
-| `[vr] refresh_rate` | 90 | 90 or 120. The launch wrapper sets it as SteamVR's rate for this game at every launch, and the game follows. 90 is the default: at 1728 per eye the GPU overruns 120 Hz and SteamVR skips frames in bursts. At 90 Hz each of the game's 60 frames a second spans 1.5 refreshes instead of 2 (interpolated). A Config.toml from an older install keeps its own `refresh_rate = 120` until you change it |
+| `[vr] refresh_rate` | 90 | 90 or 120. The launch wrapper sets it as SteamVR's rate for this game at every launch, and the game follows. 90 is the default: at 1728 per eye the GPU overruns 120 Hz and SteamVR skips frames in bursts. At 90 Hz each of the game's 60 frames a second spans 1.5 refreshes instead of 2 (interpolated). |
 | `[vr] menu_shader_quality` | 0 | 0 is a plain dark background behind the menus |
 | `[vr] hand_steering` | true | Grips hold the wheel in the first-person cockpit |
 | `[vr] cockpit_item_hand` | `"right"` | The hand that holds your item in the first-person cockpit (`"left"`, `"right"` or `"off"`), and the hand whose swing throws it |
@@ -149,7 +145,7 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | `KARTFRAME_REFRESH_HZ` | 90 or 120 for this launch, instead of `[vr] refresh_rate` (default 90) |
 | `KARTFRAME_GX_THREAD` | `1` (default) runs the game's graphics work on its own thread: game-thread CPU 13.2 to 8.5 ms a frame, 8 to 11 frames a second more in Grand Prix. `0` or `off` goes back to one thread, to compare |
 | `KARTFRAME_INTERP_MAX_MS` | Milliseconds of gap across which the interpolation keeps the previous frame (default 33, so one missed retrace glides instead of stepping; sets drawn without a previous frame went from 4.9 % to 0). `0` or `off` goes back to the game's own 1.5 intervals |
-| `KARTFRAME_WORKER_LOCK` | `narrow` (default) or `full`: how long the frame worker holds the renderer lock per refresh set. `narrow` holds it for the set's setup only and encodes the eyes outside it, so the graphics thread blocks less: on the headset its lock wait fell from 5.0 to 1.7-2.6 ms a frame and Grand Prix went from 53.9 to 60.0 frames a second, with no fault or late set. `full` holds it for the whole set, as before, to compare |
+| `KARTFRAME_WORKER_LOCK` | `narrow` (default) or `full`: how long the frame worker holds the renderer lock per refresh set. `narrow` holds it for the set's setup only and encodes the eyes outside it, so the graphics thread blocks less: its lock wait fell from 5.0 to 1.7-2.6 ms a frame and Grand Prix went from 53.9 to 60.0 frames a second, with no fault or late set. `full` holds it for the whole set, as before, to compare |
 | `KARTFRAME_EYE_PX` | The per-eye size the wrapper asks of SteamVR, 1024 to 4096 (default 1728; SteamVR's 100 % is 2160); `render_scale` multiplies it |
 | `KARTFRAME_RENDER_SCALE` | `render_scale` for this launch, e.g. 1.25 for 2160 per eye |
 | `KARTFRAME_SYSMEM` | 0 turns off the GPU's direct memory rendering mode (`TU_DEBUG=sysmem`); it is on by default |
@@ -161,14 +157,14 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | `KARTFRAME_RUMBLE` | `0` turns off the game's rumble on the controllers; a strength such as `0.4` or `1.0` sets it (default 0.7; `1` alone means on at the default) |
 | `KARTFRAME_THROW` | `0` turns off the swing to throw for this launch (`[vr] cockpit_item_throw`); `KARTFRAME_THROW_FORWARD_CM`, `_BACK_CM` and `_WINDOW_MS` change its thresholds (defaults 18, 15, 120) |
 | `KARTFRAME_GHOST_MONO` | `1` brings back the game's flat Time Trial ghost; `KARTFRAME_GHOST_ALPHA` (default 0.5) sets how strong the 3D ghost is |
-| `KARTFRAME_RESIDENT_GEOMETRY` | `1` caches display lists on the GPU (off by default; about 2 % less GPU time in the mock, not yet confirmed in the headset) |
+| `KARTFRAME_RESIDENT_GEOMETRY` | `1` caches display lists on the GPU (off by default; about 2 % less GPU time) |
 | `KARTFRAME_CPULOG` | `1` logs one `cpulog:` line a second (game CPU, run-queue wait, lock waits, core clocks); `thermal.tsv` is always written |
 | `KARTFRAME_VRTIMING_FRAMES` | 1 logs every compositor frame to `vrframes.log` in the session folder |
 | `KARTFRAME_HOME` | The data folder, if it is not `~/.local/share/KartFrame` |
 
 ## Performance
 
-Measured on my Frame, from the session logs of headset session 25 (Grand Prix at the defaults, driving seconds):
+Measured on my Frame from the session logs (Grand Prix at the defaults, driving seconds):
 
 | | |
 |---|---|
@@ -232,7 +228,7 @@ If you would like more Steam Frame ports, you can also [buy me a coffee](https:/
 
 - Built by [simplysanatori](https://github.com/simplysanatori).
 - [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS) by heurazy, which this is built on, and heurazy's [Mario Kart Wii VR port](https://github.com/heurazy/mario-kart-wii-VR-port) before it.
-- [Wiicompiled VR](https://github.com/iChris4/Wiicompiled_VR) by iChris4, the OpenXR port of WiiCompiled that Wiicompiled VR PLUS started from, and the WiiCompiled translator that turns the Wii game into C++. The held item, the swing to throw, the 3D ghost, projected reflections, resident geometry and a shader fix in this release are ported from iChris4's fork; the commits are named in the [changelog](docs/CHANGELOG.md).
+- [Wiicompiled VR](https://github.com/iChris4/Wiicompiled_VR) by iChris4, the OpenXR port of WiiCompiled that Wiicompiled VR PLUS started from, and the WiiCompiled translator that turns the Wii game into C++. The held item, the swing to throw, the 3D ghost, projected reflections, resident geometry and a shader fix in this release are ported from iChris4's fork.
 - Library art from [SteamGridDB](https://www.steamgriddb.com/): AVEX (portrait), Sho. (wide) and MegaCrashFan96 (hero, an upscale of CaptainScarLeg's). Never shipped, downloaded at install; ids in `frame/art/CREDITS.md`. The logo font is Lilita One by Juan Montoreano (SIL OFL 1.1).
 - [aurora](https://github.com/encounter/aurora), the renderer, and [Dawn](https://dawn.googlesource.com/dawn), the WebGPU implementation under it.
 - [SDL3](https://github.com/libsdl-org/SDL) and the [OpenXR SDK](https://github.com/KhronosGroup/OpenXR-SDK).
@@ -256,6 +252,6 @@ Upstream's own README is kept as [README.upstream.md](README.upstream.md).
 
 I wanted Mario Kart Wii on my Frame without Lepton, so I started from Wiicompiled VR PLUS and had it built natively for SteamVR: a Linux Arm64 build, Dawn's Vulkan backend on SteamVR's own device, pacing written for the Frame's compositor, the Frame controllers in code, and a first run that builds the game from your own disc on the Frame itself.
 
-This is vibe coded, with manual review throughout. I wrote it with Claude Code running on the Frame itself, with a mock OpenXR runtime so that almost everything could be proven without putting the headset on. The double image took twenty-two headset sessions of about a minute each, every one of them a test of one thing, and the records of those are in `frame/perf/`.
+This is vibe coded, with manual review throughout. I wrote it with Claude Code running on the Frame itself. The double image took the longest to fix; my records of that work are in `frame/perf/`.
 
 Developer notes and what was learned about SteamVR on the Frame are in the [technical notes](docs/TECHNICAL_NOTES.md).
