@@ -14,7 +14,7 @@ Confirmed in the headset: Time Trial against a ghost and Grand Prix, both smooth
 
 Built but not yet confirmed in the headset: the held item in your hand, the swing to throw, the rumble, resident geometry and eye sizes above 1728. The list is [frame/UNTESTED.md](frame/UNTESTED.md).
 
-Known issues: the game slows down while the SteamVR dashboard is open over it; 120 Hz is optional because the GPU overruns it at 1728 per eye; the heaviest sections of a course dip to about 58 frames a second; anything else using the Frame's CPUs while you play (a compiler, a container build) makes it stutter; full-view 2D effects such as Blooper ink do not cover the whole view; the laser pointer's dot is not visible on the 2D menu screen (the ray is); two and four player races are not measured in the headset. The history of the double image, which is fixed, is in the [technical notes](docs/TECHNICAL_NOTES.md).
+Known issues: opening KartFrame's settings panel over a running race slows it (about 84 frames a second, some late frames) until it is closed, while the SteamVR dashboard itself costs nothing (fix planned: the menu path will release the renderer lock before encoding and draw the controllers from a static buffer); 120 Hz is optional because the GPU overruns it at 1728 per eye; the heaviest sections of a course dip to about 58 frames a second; anything else using the Frame's CPUs while you play (a compiler, a container build) makes it stutter; full-view 2D effects such as Blooper ink do not cover the whole view; the laser pointer's dot is not visible on the 2D menu screen (the ray is); two and four player races are not measured in the headset. The history of the double image, which is fixed, is in the [technical notes](docs/TECHNICAL_NOTES.md).
 
 ## What this adds over Wiicompiled VR PLUS 1.3.1
 
@@ -176,7 +176,7 @@ Measured on my Frame, from the session logs of headset session 25 (Grand Prix at
 | Game | 60.0 frames a second, 5 s minimum 59.5 to 59.9 |
 | Eyes | 90.7 sets a second, 0 late, 0 repeated |
 | GPU per set | about 8.7 to 8.9 ms of the 11.1 ms a refresh at 90 Hz (99th percentile 9.8 to 9.9) |
-| Heaviest stretch measured | 589 to 615 draws a frame, with the dashboard open: about 59 frames a second (5 s minimum 58.1) |
+| Heaviest stretch measured | 589 to 615 draws a frame, with SteamVR's dashboard in front and the game running behind it: about 59 frames a second (5 s minimum 58.1) |
 | First run | about 6 minutes from the disc: extract 1 minute, translate 50 seconds, compile 5 minutes |
 
 What the build does, so you know what the numbers mean:
@@ -205,7 +205,7 @@ The game does not write to `~/.local/share/WiiCompiled`.
 - **The game does not start and `launch.log` says it refuses.** Read the reason in `~/.local/share/KartFrame/sessions/latest/launch.log`. If it names a kit mismatch, run `setup.sh` again.
 - **`setup.sh` says the disc is not Mario Kart Wii RMCP01.** Only the clean PAL disc is supported.
 - **SteamVR's per-app settings were not applied.** `launch.log` lists each one and what SteamVR holds after the write. They are only set when the game is started from the Steam library.
-- **Motion is uneven.** `report.txt` shows late and repeated sets per second and, on its `machine` line, how much CPU other processes used. A few percent late is normal; more usually means something else is using the GPU or the CPUs (a recording, a stream, a compiler), or the SteamVR dashboard is open.
+- **Motion is uneven.** `report.txt` shows late and repeated sets per second and, on its `machine` line, how much CPU other processes used. A few percent late is normal; more usually means something else is using the GPU or the CPUs (a recording, a stream, a compiler), or KartFrame's settings panel is open (the SteamVR dashboard itself costs nothing).
 - **The world doubles when you turn your head.** Check `launch.log` for `KARTFRAME_STEREO_PACKED=1`; `0` brings the old double image back.
 
 ## Reporting a problem
@@ -256,6 +256,6 @@ Upstream's own README is kept as [README.upstream.md](README.upstream.md).
 
 I wanted Mario Kart Wii on my Frame without Lepton, so I started from Wiicompiled VR PLUS and had it built natively for SteamVR: a Linux Arm64 build, Dawn's Vulkan backend on SteamVR's own device, pacing written for the Frame's compositor, the Frame controllers in code, and a first run that builds the game from your own disc on the Frame itself.
 
-This is vibe coded, with manual review throughout. I wrote it with Claude Code, using Anthropic's Fable 5.1, Opus 5.5 and Sonnet 5.5 models running on the Frame itself, in parallel lanes with a mock OpenXR runtime so that almost everything could be proven without putting the headset on. The double image took twenty-two headset sessions of about a minute each, every one of them a test of one thing, and the records of those are in `frame/perf/`.
+This is vibe coded, with manual review throughout. I wrote it with Claude Code running on the Frame itself, with a mock OpenXR runtime so that almost everything could be proven without putting the headset on. The double image took twenty-two headset sessions of about a minute each, every one of them a test of one thing, and the records of those are in `frame/perf/`.
 
 Developer notes and what was learned about SteamVR on the Frame are in the [technical notes](docs/TECHNICAL_NOTES.md).

@@ -2,7 +2,7 @@
 
 ## 1.0.0 (2026-10-28)
 
-The first full release. It plays Time Trial against a ghost and Grand Prix at 60 game frames a second, no doubled image, at 1728 pixels per eye. The only slowdown left that I know of is while the SteamVR dashboard is open over the running game.
+The first full release. It plays Time Trial against a ghost and Grand Prix at 60 game frames a second, no doubled image, at 1728 pixels per eye. The only slowdown left that I know of is while KartFrame's own settings panel is open over a running race.
 
 ### Fixed
 
@@ -11,14 +11,13 @@ The first full release. It plays Time Trial against a ghost and Grand Prix at 60
 - The Time Trial ghost is drawn in 3D: each eye draws the ghost kart from its own view, translucent and depth-tested against the course, where the game blended one flat picture into both eyes. Adapted from iChris4's Wiicompiled_VR (f2f7c50, 7f9de4c, e89988f).
 - Projected reflections (Rainbow Road, Coconut Mall glass) no longer follow your head (iChris4, 4aac0ec).
 - Vertex and index staging grew (3 to 8 MB and 2 to 4 MB), and a draw that overflows is skipped and logged instead of aborting the game (iChris4, e4c98da).
-- The game's rumble (bumps, hits) now reaches the controllers. In the default gamepad mode it did not reach them at all.
+- The game's rumble (bumps, hits) now reaches both controllers; strength with `KARTFRAME_RUMBLE`. In the default gamepad mode it did not reach them at all.
 - In menus, the controllers and the pointer ray show in front of the menu screen, in 3D. They used to be hidden behind it.
 
 ### Added
 
 - The item you hold is drawn in your hand in first person (iChris4: db30945, b181efa, 5f2ecc0, 7f5a849, 405ac27, 4489d4a). The models are read from your own disc at run time.
 - Swing to throw: a quick swing of the item hand forward or back throws the item that way (iChris4: ebc97ef, 4489d4a).
-- Rumble on both controllers, with a strength setting (`KARTFRAME_RUMBLE`).
 - Refresh rate and eye size settings: `[vr] refresh_rate` or `KARTFRAME_REFRESH_HZ` (90 or 120), `render_scale` or `KARTFRAME_RENDER_SCALE`, `KARTFRAME_EYE_PX`. The wrapper sets the refresh rate in SteamVR for you and the game logs `view size:` at start.
 - An interpolation window of 33 ms (`KARTFRAME_INTERP_MAX_MS`): one missed game frame glides instead of stepping.
 - Resident geometry (`KARTFRAME_RESIDENT_GEOMETRY=1`, off by default): display lists cached on the GPU, drawn through native vertex input (iChris4, b5d9c19). About 2 % less GPU time in the mock.
@@ -38,7 +37,7 @@ The first full release. It plays Time Trial against a ghost and Grand Prix at 60
 
 ### Known issues
 
-- Opening the SteamVR dashboard over a running game slows it and drops frames. Expected.
+- Opening KartFrame's settings panel over a running race slows it (about 84 frames a second, some late frames) until it is closed; the SteamVR dashboard itself costs nothing. Fix planned: the menu path will release the renderer lock before encoding and draw the controllers from a static buffer.
 - 120 Hz at 1728 per eye needs about 1 ms less GPU time a refresh than the Frame has; SteamVR skips frames in bursts. It is still a switch (`KARTFRAME_REFRESH_HZ=120`).
 - The heaviest sections of a course (600 draws or more) dip to about 58 frames a second.
 - Other work on the Frame's CPUs while you play (compilers, container builds) makes the game stutter, and the clocks drop when the Frame is hot.

@@ -17,7 +17,7 @@ The full list, with the controls, is in the [README](https://github.com/simplysa
 
 ## Known issues
 
-- The game slows down while the SteamVR dashboard is open over it.
+- Opening KartFrame's settings panel over a running race slows it (about 84 frames a second, some late frames) until it is closed; the SteamVR dashboard itself costs nothing. Fix planned: the menu path will release the renderer lock before encoding and draw the controllers from a static buffer.
 - 120 Hz at 1728 per eye overruns the GPU, so 90 Hz is the default. Anything else using the Frame's CPUs while you play (compilers, container builds) makes it stutter.
 - The heaviest sections of a course dip to about 58 frames a second.
 - Full-view 2D effects (Blooper ink) do not cover the whole view; the laser pointer's dot is not visible on the 2D menu screen; two and four player races are not measured.
