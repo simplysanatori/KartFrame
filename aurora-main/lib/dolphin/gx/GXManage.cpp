@@ -262,6 +262,11 @@ GXFifoObj* GXInit(void* base, u32 size) {
 }
 
 void GXDrawDone() {
+  // Lane AK: the drain's waits (SEALED, the renderer lock) are counted as GXDrawDone's.
+  struct InDrawDone {
+    InDrawDone() noexcept { aurora::t_gpuLockInDrawDone = true; }
+    ~InDrawDone() { aurora::t_gpuLockInDrawDone = false; }
+  } inDrawDone;
   aurora::gx::fifo::drain();
   if (DrawDoneCB != nullptr)
     DrawDoneCB();

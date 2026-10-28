@@ -479,6 +479,38 @@ std::atomic<uint64_t> g_workerEncodeNs{0};
 std::atomic<uint64_t> g_workerPermitWaitNs{0};
 std::atomic<uint64_t> g_workerPrepareNs{0};
 
+// Lane AK: cumulative, never reset (aurora_lock_stats_line takes differences): the time each site was blocked
+// acquiring the renderer GPU mutex and how often, the producer's waits for SEALED and DONE, and how long the frame
+// worker holds the mutex (seal, next-frame preparation, ImGui restart, refresh sets).
+struct GpuLockStats {
+  std::atomic<uint64_t> waitNs[static_cast<size_t>(GpuLockSite::Count)]{};
+  std::atomic<uint64_t> waits[static_cast<size_t>(GpuLockSite::Count)]{};
+  std::atomic<uint64_t> sealedNs{0}, sealedDrawDoneNs{0}, doneNs{0};
+  std::atomic<uint64_t> sealHoldNs{0}, prepareHoldNs{0}, newFrameHoldNs{0};
+  std::atomic<uint64_t> sets{0}, setEncodeNs{0}, setHoldNs{0};
+};
+GpuLockStats g_lockStats;
+uint64_t lock_stats_now_ns() noexcept {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+// Adds the time from construction to destruction (or to release()) to a hold counter.
+class HoldTimer {
+public:
+  explicit HoldTimer(std::atomic<uint64_t>& counter) noexcept : counter_(&counter), start_(lock_stats_now_ns()) {}
+  ~HoldTimer() { release(); }
+  void release() noexcept {
+    if (counter_ != nullptr) counter_->fetch_add(lock_stats_now_ns() - start_, std::memory_order_relaxed);
+    counter_ = nullptr;
+  }
+  HoldTimer(const HoldTimer&) = delete;
+  HoldTimer& operator=(const HoldTimer&) = delete;
+
+private:
+  std::atomic<uint64_t>* counter_;
+  uint64_t start_;
+};
+
 void wait_for_frame_worker_private(FrameWorkerPhase phase) noexcept {
   constexpr auto kWaitServiceInterval = std::chrono::milliseconds(1);
   if (frame_worker_phase_reached(phase)) {
@@ -489,6 +521,9 @@ void wait_for_frame_worker_private(FrameWorkerPhase phase) noexcept {
   const auto waited = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
   (phase == FrameWorkerPhase::Sealed ? g_producerWaitSealedNs : g_producerWaitDoneNs)
+      .fetch_add(waited, std::memory_order_relaxed);
+  (phase == FrameWorkerPhase::Sealed ? (t_gpuLockInDrawDone ? g_lockStats.sealedDrawDoneNs : g_lockStats.sealedNs)
+                                     : g_lockStats.doneNs)
       .fetch_add(waited, std::memory_order_relaxed);
 }
 
@@ -2515,7 +2550,8 @@ bool begin_frame_impl(bool pumpEvents, ImGuiFramePolicy imguiPolicy, bool* imgui
 
 bool begin_frame_render_state_impl(ImGuiFramePolicy imguiPolicy, bool* imguiNewFrameOwed) noexcept {
 #ifdef AURORA_ENABLE_GX
-  std::lock_guard gpuLock(g_rendererGpuMutex);
+  const TimedGpuLock gpuLock(GpuLockSite::Prepare);
+  const HoldTimer hold(g_lockStats.prepareHoldNs);
   // Note the debt before gfx::begin_frame() can fail: the synchronous path always started the
   // ImGui frame here, and the runtime's retry loop depends on that pairing.
   if (imgui::host_frames_active()) {
@@ -2606,8 +2642,29 @@ void note_scene_frames() noexcept {
   scene.previousFrame = g_retainedStereo.continuous ? g_retainedStereo.previousLogicalFrame : g_retainedStereo.logicalFrame;
 }
 
+// KARTFRAME_WORKER_LOCK=narrow (lane AK, default full): an immersive refresh set holds the renderer GPU mutex only
+// while it takes the XR packet and fills its interpolated uniforms, and encodes both eyes, the panel composite and
+// the sink, and submits, without it. That encode reads only the sealed frame (draws recorded with resolved bind groups
+// and pipeline refs; the pipeline cache locks itself), the worker's own eye targets, the buffers made at start-up and
+// the worker-only sink and overlay state, exactly what encode_sealed_frame's eyes read without the mutex. Dawn
+// serialises its own calls (ImplicitDeviceSynchronization). The menu path keeps the whole-set lock.
+// full: the whole set under the mutex, as before. frame/perf/LANE_AK.md has the audit.
+bool worker_lock_narrow() noexcept {
+  static const bool narrow = [] {
+    const char* env = std::getenv("KARTFRAME_WORKER_LOCK");
+    const bool on = env != nullptr && std::strcmp(env, "narrow") == 0;
+    Log.info("frame worker lock: {} (KARTFRAME_WORKER_LOCK){}", on ? "narrow" : "full",
+             on ? "; refresh sets encode their eyes, composite and sink outside the renderer lock" : "");
+    return on;
+  }();
+  return narrow;
+}
+
 void run_retained_stereo_frame(gfx::SealedFrame& sealedFrame) noexcept {
-  std::lock_guard gpuLock(g_rendererGpuMutex);
+  const bool narrow = worker_lock_narrow();
+  std::optional<TimedGpuLock> gpuLock(std::in_place, GpuLockSite::Set);
+  const uint64_t setStart = lock_stats_now_ns();
+  HoldTimer hold(g_lockStats.setHoldNs);
   if (!gx::stereo_frame_interpolation_active() ||
       (!g_retainedMenuImage && !gfx::has_late_stereo_replay(sealedFrame))) return;
   const auto input = request_stereo_frame(g_retainedStereo.logicalFrame, g_retainedStereo.contentTag);
@@ -2675,6 +2732,11 @@ void run_retained_stereo_frame(gfx::SealedFrame& sealedFrame) noexcept {
     return;
   }
   note_scene_frames();
+  if (narrow) {
+    // Everything below reads the sealed frame and worker-owned state only (see worker_lock_narrow).
+    hold.release();
+    gpuLock.reset();
+  }
   if (g_directEyesCalibration.choose() == 1 && !use_direct_eye_targets(replay, *input)) {
     g_directEyesCalibration.not_applied();  // a trial set that could not go straight in: not a sample
   }
@@ -2719,6 +2781,9 @@ void run_retained_stereo_frame(gfx::SealedFrame& sealedFrame) noexcept {
   }
   g_directEyesCalibration.after_submit();
   gfx::gpu_timing_after_submit();
+  hold.release();
+  g_lockStats.setEncodeNs.fetch_add(lock_stats_now_ns() - setStart, std::memory_order_relaxed);
+  g_lockStats.sets.fetch_add(1, std::memory_order_relaxed);
 }
 
 // Phase 1: everything that touches producer-shared renderer state. Needs g_rendererGpuMutex and
@@ -3277,7 +3342,8 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame, uint64_t contentTag, 
   };
   auto stretchStarted = std::chrono::steady_clock::now();
   {
-    std::lock_guard gpuLock(g_rendererGpuMutex);
+    const TimedGpuLock gpuLock(GpuLockSite::Seal);
+    const HoldTimer hold(g_lockStats.sealHoldNs);
     seal_frame_locked(sealedFrame, ctx, contentTag, sceneAnchor, std::move(hostImGuiFrame));
   }
   g_workerSealNs.fetch_add(elapsedNs(stretchStarted), std::memory_order_relaxed);
@@ -3347,7 +3413,8 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame, uint64_t contentTag, 
   }
   if (imguiNewFrameOwed) {
     // Safe only now: every slot has replayed this frame's ImGui draw lists.
-    std::lock_guard gpuLock(g_rendererGpuMutex);
+    const TimedGpuLock gpuLock(GpuLockSite::NewFrame);
+    const HoldTimer hold(g_lockStats.newFrameHoldNs);
     imgui::new_frame(window::get_window_size());
   }
   g_workerEncodeNs.fetch_add(elapsedNs(stretchStarted), std::memory_order_relaxed);
@@ -3572,7 +3639,7 @@ void end_frame(uint64_t contentTag, imgui::HostFramePtr hostImGuiFrame) noexcept
   // Later FIFO writes belong exclusively to the next frame.
   {
     const uint64_t lockStart = gfx::hitch::now_ns();
-    std::lock_guard gpuLock(g_rendererGpuMutex);
+    const TimedGpuLock gpuLock(GpuLockSite::EndFrame);
     g_hitchTracker.workerWaitNs += gfx::hitch::now_ns() - lockStart;
     gx::fifo::drain();
   }
@@ -3623,6 +3690,21 @@ void quiesce_frame_worker() noexcept {
   }
 }
 std::recursive_mutex& renderer_gpu_mutex() noexcept { return g_rendererGpuMutex; }
+thread_local bool t_gpuLockInDrawDone = false;
+void note_gpu_lock_wait(GpuLockSite site, uint64_t ns) noexcept {
+  const auto i = static_cast<size_t>(site);
+  g_lockStats.waitNs[i].fetch_add(ns, std::memory_order_relaxed);
+  g_lockStats.waits[i].fetch_add(1, std::memory_order_relaxed);
+}
+TimedGpuLock::TimedGpuLock(GpuLockSite site) noexcept {
+  if (g_rendererGpuMutex.try_lock()) {
+    return;
+  }
+  const uint64_t start = lock_stats_now_ns();
+  g_rendererGpuMutex.lock();
+  note_gpu_lock_wait(site == GpuLockSite::Fifo && t_gpuLockInDrawDone ? GpuLockSite::DrawDone : site,
+                     lock_stats_now_ns() - start);
+}
 bool stereo_frame_provider_active() noexcept { return g_stereoProviderActive.load(std::memory_order_acquire); }
 
 void set_stereo_frame_provider(AuroraStereoFrameProvider provider, void* userdata) noexcept {
@@ -3718,9 +3800,66 @@ void aurora_set_frame_log_callback(AuroraFrameLogCallback callback) {
 extern "C" void aurora_imgui_host_frame_begin(void) {
 #ifdef AURORA_ENABLE_GX
   // ImGui's WebGPU backend creates its device objects lazily from new_frame.
-  std::lock_guard gpuLock(aurora::g_rendererGpuMutex);
+  const aurora::TimedGpuLock gpuLock(aurora::GpuLockSite::Overlay);
 #endif
   aurora::imgui::host_frame_begin(aurora::window::get_window_size());
+}
+// Lane AK: the renderer-lock part of the KARTFRAME_CPULOG line (runtime/src/cpu_monitor.cpp, its only caller, one
+// thread, once a second): differences since the previous call, per game frame (`frames` in `seconds`).
+extern "C" size_t aurora_lock_stats_line(char* out, size_t size, uint64_t frames, double seconds) {
+#ifdef AURORA_ENABLE_GX
+  using aurora::GpuLockSite;
+  auto& st = aurora::g_lockStats;
+  constexpr size_t kSites = static_cast<size_t>(GpuLockSite::Count);
+  struct Snapshot {
+    uint64_t waitNs[kSites], waits[kSites], sealed, sealedDrawDone, done, sealHold, prepareHold, newFrameHold, sets,
+        setEncode, setHold;
+  };
+  static Snapshot last{};
+  Snapshot now{};
+  for (size_t i = 0; i < kSites; ++i) {
+    now.waitNs[i] = st.waitNs[i].load(std::memory_order_relaxed);
+    now.waits[i] = st.waits[i].load(std::memory_order_relaxed);
+  }
+  now.sealed = st.sealedNs.load(std::memory_order_relaxed);
+  now.sealedDrawDone = st.sealedDrawDoneNs.load(std::memory_order_relaxed);
+  now.done = st.doneNs.load(std::memory_order_relaxed);
+  now.sealHold = st.sealHoldNs.load(std::memory_order_relaxed);
+  now.prepareHold = st.prepareHoldNs.load(std::memory_order_relaxed);
+  now.newFrameHold = st.newFrameHoldNs.load(std::memory_order_relaxed);
+  now.sets = st.sets.load(std::memory_order_relaxed);
+  now.setEncode = st.setEncodeNs.load(std::memory_order_relaxed);
+  now.setHold = st.setHoldNs.load(std::memory_order_relaxed);
+  const double perFrame = frames != 0 ? 1.0 / static_cast<double>(frames) : 0.0;
+  const auto ms = [&](uint64_t a, uint64_t b) { return static_cast<double>(a - b) / 1e6 * perFrame; };
+  const auto site = [&](GpuLockSite s) { return ms(now.waitNs[static_cast<size_t>(s)], last.waitNs[static_cast<size_t>(s)]); };
+  const auto count = [&](GpuLockSite s) {
+    return static_cast<double>(now.waits[static_cast<size_t>(s)] - last.waits[static_cast<size_t>(s)]) * perFrame;
+  };
+  const uint64_t sets = now.sets - last.sets;
+  const double encodePerSet = sets != 0 ? static_cast<double>(now.setEncode - last.setEncode) / 1e6 / sets : 0.0;
+  const double holdPerSet = sets != 0 ? static_cast<double>(now.setHold - last.setHold) / 1e6 / sets : 0.0;
+  const int written = std::snprintf(
+      out, size,
+      " | lock wait ms/frame (waits): gx fifo %.2f (%.1f) drawdone %.2f (%.1f) dl %.2f raw %.2f end %.2f, overlay %.2f (%.1f),"
+      " worker seal %.2f prep %.2f set %.2f newframe %.2f | gx waits sealed %.2f (drawdone %.2f) done %.2f |"
+      " worker holds ms/frame: seal %.2f prep %.2f newframe %.2f; sets %.1f/s, %.2f ms encode, %.2f ms held (%.0f%%) [%s]",
+      site(GpuLockSite::Fifo), count(GpuLockSite::Fifo), site(GpuLockSite::DrawDone), count(GpuLockSite::DrawDone),
+      site(GpuLockSite::DisplayList), site(GpuLockSite::RawDraw), site(GpuLockSite::EndFrame), site(GpuLockSite::Overlay),
+      count(GpuLockSite::Overlay), site(GpuLockSite::Seal), site(GpuLockSite::Prepare), site(GpuLockSite::Set),
+      site(GpuLockSite::NewFrame), ms(now.sealed + now.sealedDrawDone, last.sealed + last.sealedDrawDone),
+      ms(now.sealedDrawDone, last.sealedDrawDone), ms(now.done, last.done), ms(now.sealHold, last.sealHold),
+      ms(now.prepareHold, last.prepareHold), ms(now.newFrameHold, last.newFrameHold),
+      seconds > 0.0 ? static_cast<double>(sets) / seconds : 0.0, encodePerSet, holdPerSet,
+      encodePerSet > 0.0 ? holdPerSet / encodePerSet * 100.0 : 0.0, aurora::worker_lock_narrow() ? "narrow" : "full");
+  last = now;
+  return written > 0 ? (std::min)(static_cast<size_t>(written), size > 0 ? size - 1 : 0) : 0;
+#else
+  (void)frames;
+  (void)seconds;
+  if (size > 0) out[0] = '\0';
+  return 0;
+#endif
 }
 extern "C" void* aurora_imgui_host_frame_end(void) { return new aurora::imgui::HostFramePtr(aurora::imgui::host_frame_end()); }
 extern "C" void aurora_imgui_host_frame_release(void* imguiFrame) {
