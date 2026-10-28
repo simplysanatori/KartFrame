@@ -8,7 +8,9 @@
 #                                          build's binary into KARTFRAME_HOME/bin (default <repo>/build-linux)
 #
 #   --name NAME     shortcut name (default "KartFrame", with --dev "KartFrame (dev)")
-#   --art DIR       optional library art: p.png (portrait), wide.png, hero.png, logo.png, icon.png
+#   --art DIR       your own library art instead of the bundled set: p.png (portrait), wide.png, hero.png,
+#                   logo.png, icon.png (the bundled KartFrame art is installed when this is not given)
+#   --no-art        install no library art
 #   --no-models     do not convert the Frame controller models
 #   -h, --help
 #
@@ -25,12 +27,13 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-DEV=0; NAME=; ART=; MODELS=1; SRC=
+DEV=0; NAME=; ART=; NOART=0; MODELS=1; SRC=
 while [ $# -gt 0 ]; do
     case $1 in
         --dev) DEV=1 ;;
         --name) NAME=$2; shift ;;
         --art) ART=$2; shift ;;
+        --no-art) NOART=1 ;;
         --no-models) MODELS=0 ;;
         -h | --help) sed -n '2,/^set -e/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
         -*) echo "unknown option $1" >&2; exit 2 ;;
@@ -134,13 +137,31 @@ else
     GRID=$(ls -d "$STEAM"/userdata/*/config 2> /dev/null | head -1)/grid
 fi
 
-# Optional library art; Steam finds it by the shortcut's appid.
-if [ -n "$ART" ] && [ "$APPID" != none ] && [ -n "$GRID" ]; then
-    mkdir -p "$GRID"
-    for kind in p:p wide: hero:_hero logo:_logo icon:_icon; do
-        f=$ART/${kind%%:*}.png
-        [ -f "$f" ] && cp "$f" "$GRID/$APPID${kind#*:}.png" && echo "art: $GRID/$APPID${kind#*:}.png"
-    done
+# Library art; Steam finds it by the shortcut's appid. Our own set (frame/art) unless --art DIR is given.
+# With a SteamGridDB key and ffmpeg the portrait, wide and hero are made from Mario Kart Wii key art
+# instead (see frame/art/art.py); anything replaced is backed up under ~/.local/share/icon-backups.
+if [ "$NOART" = 0 ] && [ "$APPID" != none ] && [ -n "$GRID" ]; then
+    if [ -n "$ART" ]; then
+        mkdir -p "$GRID"
+        for kind in p:p wide: hero:_hero logo:_logo icon:_icon; do
+            f=$ART/${kind%%:*}.png
+            [ -f "$f" ] && cp "$f" "$GRID/$APPID${kind#*:}.png" && echo "art: $GRID/$APPID${kind#*:}.png"
+        done
+    elif [ -f "$HERE/art/art.py" ]; then
+        [ -n "$KARTFRAME_STEAM_DIR" ] && export KARTFRAME_ART_SGDB=${KARTFRAME_ART_SGDB:-no}   # a copied Steam folder: no network
+        python3 "$HERE/art/art.py" --grid "$GRID" --appid "$APPID" --home "$KFHOME" ||
+            echo "warning: could not install the library art"
+        # The dock icon: Steam's own call when Steam is live; offline, an edit of the copied shortcuts.vdf.
+        if [ -n "$KARTFRAME_STEAM_DIR" ]; then
+            for CFG in "$STEAM"/userdata/*/config; do
+                [ -f "$CFG/shortcuts.vdf" ] && python3 "$HERE/art/art.py" --vdf "$CFG/shortcuts.vdf" --appid "$APPID" --copy \
+                    --icon "$KFHOME/art/icon.png" > /dev/null 2>&1 || true
+            done
+        else
+            $CEF "(() => { SteamClient.Apps.SetShortcutIcon($APPID, '$KFHOME/art/icon.png'); return 1; })()" > /dev/null 2>&1 ||
+                echo "note: Steam did not take the dock icon; with Steam stopped run: python3 $HERE/art/art.py --vdf <userdata>/config/shortcuts.vdf --appid $APPID"
+        fi
+    fi
 fi
 
 cat << MSG
