@@ -76,6 +76,10 @@ To update, run `frame/install.sh` with the new tarball. If the launch wrapper th
 
 The installer changes nothing outside the folders listed under [Files](#files), the Steam shortcut and the controller models. To remove KartFrame, run `~/Games/KartFrame/app/tools/uninstall.sh`. It keeps your data folder unless you pass `--purge`.
 
+## Install with Frametanium
+
+If you use [Frametanium](https://github.com/Cogential/frametanium), add `simplysanatori/KartFrame` there. It downloads the release, runs its `install.sh` and updates it when I publish a new version. Run the one time disc setup (step 3 above) yourself, and again after an update if the launch wrapper reports a kit mismatch.
+
 ## First run
 
 The launch wrapper checks that the installed program was built for the installed kit. If it was not, it stops and writes the reason to the session log; run `setup.sh` again.

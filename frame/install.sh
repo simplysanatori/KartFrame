@@ -3,7 +3,7 @@
 # and tools beside it, and a non-Steam shortcut in Steam's library (through Steam's own client API,
 # so Steam must be running; no editing of shortcuts.vdf behind its back).
 #
-#   frame/install.sh [options] [kartframe-*-linux-arm64.tar.gz | BUILD_DIR]
+#   frame/install.sh [options] [kartframe-*-linux-arm64.tar.gz | UNPACKED_RELEASE_DIR | BUILD_DIR]
 #   frame/install.sh --dev [BUILD_DIR]     a separate "KartFrame (dev)" shortcut that runs the build
 #                                          build's binary into KARTFRAME_HOME/bin (default <repo>/build-linux)
 #
@@ -14,7 +14,8 @@
 #   --no-models     do not convert the Frame controller models
 #   -h, --help
 #
-# Without a source: the newest release tarball in ./release, else <repo>/build-linux.
+# Without a source: the folder this script is in when it is an unpacked release (that is how
+# Frametanium runs it), else the newest release tarball in ./release, else <repo>/build-linux.
 # A BUILD_DIR is a CMake build directory: kartframe plus the resources next to it.
 #
 # Environment:
@@ -49,6 +50,8 @@ if [ "$DEV" = 1 ]; then
 else
     NAME=${NAME:-KartFrame}
     APP=${KARTFRAME_APP:-$HOME/Games/KartFrame/app}
+    # Run from an unpacked release (the tarball's own install.sh, e.g. started by Frametanium): install that folder.
+    [ -n "$SRC" ] || { [ -f "$HERE/setup.sh" ] && [ -f "$HERE/kartframe.sh" ] && [ -d "$HERE/kit" ] && SRC=$HERE; } || true
     [ -n "$SRC" ] || SRC=$(ls "$REPO"/release/kartframe-*-linux-arm64.tar.gz 2> /dev/null | sort -V | tail -1)
     [ -n "$SRC" ] || { [ -x "$REPO/build-linux/kartframe" ] && SRC=$REPO/build-linux; }
     [ -n "$SRC" ] && [ -e "$SRC" ] || { echo "usage: $0 [--dev] kartframe-*-linux-arm64.tar.gz | BUILD_DIR" >&2; exit 1; }
@@ -83,6 +86,18 @@ copy_build() {  # BUILD_DIR: the binary and the resources the game wants beside 
 if [ "$DEV" = 1 ]; then
     echo "dev install: copying the build in $BUILD to $KFHOME/bin (run again after a rebuild)"
     copy_build "$BUILD"
+elif [ -d "$SRC" ] && [ -f "$SRC/setup.sh" ] && [ -d "$SRC/kit" ]; then
+    echo "installing the unpacked release in $SRC into $APP"
+    if [ "$(readlink -f "$SRC")" != "$(readlink -f "$APP")" ]; then
+        for e in "$SRC"/*; do
+            n=$(basename "$e")
+            case $n in
+                kit | toolchain | translator)   # replaced as a whole; hard-linked when possible, so no second 250 MB copy
+                    rm -rf "${APP:?}/$n"; cp -al "$e" "$APP/$n" 2> /dev/null || { rm -rf "${APP:?}/$n"; cp -a "$e" "$APP/$n"; } ;;
+                *) cp -a "$e" "$APP/" ;;
+            esac
+        done
+    fi
 elif [ -d "$SRC" ]; then
     echo "installing the build in $SRC"
     copy_build "$SRC"
