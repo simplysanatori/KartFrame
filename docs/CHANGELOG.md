@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 (November 2026)
+
+- You can now install and update KartFrame with Frametanium. The release's own `install.sh` installs the unpacked release in place, so Frametanium can run it.
+- The tarball no longer holds an absolute symlink (one of the compiler's licence files in the kit's sysroot), which Frametanium and other safe unpackers refuse. It is a plain file now.
+- Nothing in the game changed, and the kit is the same one as in 1.0.0 with the same fingerprint, so you do not need to run the disc setup again.
+
 ## 1.0.0 (October 2026)
 
 The first release of KartFrame: Mario Kart Wii VR as a native Arm64 Linux program for the Valve Steam Frame. If you have been playing the Quest APK through Lepton, this is the same game without the Android layer underneath, and it runs better.

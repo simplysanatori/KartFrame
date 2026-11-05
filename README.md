@@ -51,11 +51,11 @@ Upstream runs on Windows and on the Meta Quest. On the Frame that would mean Lep
    cd KartFrame
    ```
 
-2. Download `kartframe-1.0.0-linux-arm64.tar.gz` and its `.sha256` file from the [Releases](https://github.com/simplysanatori/KartFrame/releases) page. Check the download and install it:
+2. Download `kartframe-1.0.1-linux-arm64.tar.gz` and its `.sha256` file from the [Releases](https://github.com/simplysanatori/KartFrame/releases) page. Check the download and install it:
 
    ```sh
-   sha256sum -c kartframe-1.0.0-linux-arm64.tar.gz.sha256
-   frame/install.sh ~/Downloads/kartframe-1.0.0-linux-arm64.tar.gz
+   sha256sum -c kartframe-1.0.1-linux-arm64.tar.gz.sha256
+   frame/install.sh ~/Downloads/kartframe-1.0.1-linux-arm64.tar.gz
    ```
 
    The installer unpacks the program into `~/Games/KartFrame/app`. It adds **KartFrame** to your Steam library as a non-Steam shortcut, or updates the entry if it is there. It converts the Frame's controller models from SteamVR's own files. The script talks to Steam through its local debugging port, which SteamOS has on by default.
