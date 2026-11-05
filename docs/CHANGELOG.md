@@ -5,6 +5,7 @@
 - You can now install and update KartFrame with Frametanium. The release's own `install.sh` installs the unpacked release in place, so Frametanium can run it.
 - The tarball no longer holds an absolute symlink (one of the compiler's licence files in the kit's sysroot), which Frametanium and other safe unpackers refuse. It is a plain file now.
 - Nothing in the game changed, and the kit is the same one as in 1.0.0 with the same fingerprint, so you do not need to run the disc setup again.
+- The release also has a `kartframe-<version>-framedrop-linux-arm64.zip` and a manifest for FrameDrop. It adds its own library entry, and its `run.sh` installs the release without adding a second one.
 
 ## 1.0.0 (October 2026)
 

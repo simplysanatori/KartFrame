@@ -80,6 +80,10 @@ The installer changes nothing outside the folders listed under [Files](#files), 
 
 If you use [Frametanium](https://github.com/Cogential/frametanium), add `simplysanatori/KartFrame` there. It downloads the release, runs its `install.sh` and updates it when I publish a new version. Run the one time disc setup (step 3 above) yourself, and again after an update if the launch wrapper reports a kit mismatch.
 
+## Install with FrameDrop
+
+[FrameDrop](https://framedropvr.com) can install this too: [Install with FrameDrop](https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fsimplysanatori%2FKartFrame%2Freleases%2Flatest%2Fdownload%2Fkartframe.framedrop.json). The release has a `kartframe-<version>-framedrop-linux-arm64.zip` and a `kartframe.framedrop.json` for it. FrameDrop unpacks the zip on the Frame and adds its own library entry, which runs the `run.sh` in the zip. The first time it runs, and again after an update, `run.sh` runs `install.sh` with the Steam shortcut step turned off, so you get FrameDrop's entry and no second one from the installer, and then starts KartFrame through its launch wrapper. The one time disc setup is still yours to run, with `~/Games/KartFrame/app/setup.sh`.
+
 ## First run
 
 The launch wrapper checks that the installed program was built for the installed kit. If it was not, it stops and writes the reason to the session log; run `setup.sh` again.
