@@ -2,13 +2,13 @@
 
 KartFrame is a fork of [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS) by heurazy. In that project the Wii game is statically translated to C++, drawn by the aurora renderer on Dawn (WebGPU) and shown through OpenXR. KartFrame builds the same game as a Linux Arm64 program that runs in the Frame's own SteamVR, without Lepton, an APK or adb. This document is for version 1.0.0.
 
-Install, first run, controls, settings and how to report problems are in the [README](../README.md). This one says how the port works, how to build it, and what I learned about SteamVR on the Frame. Where a claim needs a verdict from the headset it carries `[to confirm in the headset]`, and the claim is listed in [frame/UNTESTED.md](../frame/UNTESTED.md).
+Install, first run, controls, settings and how to report problems are in the [README](../README.md) and the [user guide](USER_GUIDE.md). This one says how the port works, how to build it, and what I learned about SteamVR on the Frame. Where a claim needs a verdict from the headset it carries `[to confirm in the headset]`, and the claim is listed in [frame/UNTESTED.md](../frame/UNTESTED.md).
 
 Not affiliated with Valve, Nintendo or the upstream author.
 
 ## AI disclosure
 
-I did not write this code by hand. The port, its scripts and these notes were written with Anthropic's Claude (Fable 5.1, Opus 5.5 and Sonnet 5.5, through Claude Code), running on my Steam Frame. I chose what to attempt, supplied the disc, reviewed the code and the scripts as they were written, tested in the headset and reported what I saw. Claude read the logs and changed the code.
+I started this port and used Anthropic's Claude (Fable 5.1, Opus 5.5 and Sonnet 5.5, through Claude Code, running on my Steam Frame) to speed up development. I wrote, reviewed and fixed code by hand all the way through, kept the AI's work checked and reined in, and aimed to keep the port as lightweight as possible. I tested in the headset.
 
 ## Status
 
@@ -106,7 +106,7 @@ They only apply to a launch from the Steam library, where `SteamAppId` is set. T
 
 ### Controls
 
-The layout is in code, in `runtime/include/vr/frame_controls.h`, as pure functions that a table test checks without OpenXR. The runtime enables `XR_VALVE_frame_controller_interaction`, suggests bindings for `/interaction_profiles/valve/frame_controller`, and latches the layout when `xrGetCurrentInteractionProfile` reports that profile. There is no SteamVR binding file. The controls table in the README is the layout as coded.
+The layout is in code, in `runtime/include/vr/frame_controls.h`, as pure functions that a table test checks without OpenXR. The runtime enables `XR_VALVE_frame_controller_interaction`, suggests bindings for `/interaction_profiles/valve/frame_controller`, and latches the layout when `xrGetCurrentInteractionProfile` reports that profile. There is no SteamVR binding file. The controls table in the [user guide](USER_GUIDE.md#controls) is the layout as coded.
 
 Since 1.0.0 the input layer also has the swing-to-throw detector (`openxr_item_throw.h`, from iChris4's fork): it watches the item hand's grip in the seat frame and, on a swing, plays an aimed throw on the virtual gamepad's port (stick Y fully forward or back, then the item button), because the default controller mode is the gamepad and not the Wii Remote path the fork used. The GameCube rumble motor (`PAD__ControlMotor_HLE`) is reported to a bridge and shaped into 50 ms haptic pulses on both controllers (`openxr_gamepad_rumble.h`). The held item is read at the race draw boundary and drawn by aurora in each eye's cockpit pass.
 

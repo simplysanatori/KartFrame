@@ -41,7 +41,7 @@ That's ok, but rules apply:
 
 ## Bug reports
 
-For the Steam Frame build, see "Logs and reporting a problem" in the [README](README.md).
+For the Steam Frame build, see "Reporting a problem" in the [README](README.md#reporting-a-problem).
 For the upstream port, see "Troubleshooting" in [README.upstream.md](README.upstream.md).
 
 ## A note on related projects
