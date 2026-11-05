@@ -260,6 +260,6 @@ Upstream's own README is kept as [README.upstream.md](README.upstream.md).
 
 I wanted Mario Kart Wii on my Frame without Lepton, so I started from Wiicompiled VR PLUS and had it built natively for SteamVR: a Linux Arm64 build, Dawn's Vulkan backend on SteamVR's own device, pacing written for the Frame's compositor, the Frame controllers in code, and a first run that builds the game from your own disc on the Frame itself.
 
-This is vibe coded, with manual review throughout. I wrote it with Claude Code running on the Frame itself. The double image took the longest to fix; my records of that work are in `frame/perf/`.
+I made this with partial assistance from Claude. The double image took the longest to fix; my records of that work are in `frame/perf/`.
 
 Developer notes and what was learned about SteamVR on the Frame are in the [technical notes](docs/TECHNICAL_NOTES.md).
