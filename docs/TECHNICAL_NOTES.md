@@ -8,7 +8,7 @@ Not affiliated with Valve, Nintendo or the upstream author.
 
 ## AI disclosure
 
-I did not write this code by hand. The port, its scripts and these notes were written with Anthropic's Claude (Fable 5.1, Opus 5.5 and Sonnet 5.5, through Claude Code), running on my Steam Frame. I chose what to attempt, supplied the disc, reviewed the code and the scripts as they were written, tested in the headset and reported what I saw. Claude read the logs and changed the code. The upstream author has not reviewed this port. Read the code before trusting it.
+I did not write this code by hand. The port, its scripts and these notes were written with Anthropic's Claude (Fable 5.1, Opus 5.5 and Sonnet 5.5, through Claude Code), running on my Steam Frame. I chose what to attempt, supplied the disc, reviewed the code and the scripts as they were written, tested in the headset and reported what I saw. Claude read the logs and changed the code.
 
 ## Status
 
