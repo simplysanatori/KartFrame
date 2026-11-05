@@ -54,7 +54,9 @@ copy_pkg gcc "^/usr/lib/gcc/$triple/$gccver/(crtbegin|crtbeginS|crtbeginT|crtend
     echo "Source for all of them is available from the upstream projects named here."
 } > "$dest/LICENSES/README.txt"
 for d in /usr/share/licenses/gcc /usr/share/licenses/gcc-libs; do
-    [[ -d $d ]] && cp -a "$d/." "$dest/LICENSES/" 2>/dev/null || true
+    # -L: the packages link some licence files by absolute path (/usr/share/licenses/common/...); an
+    # absolute link in the release tarball is refused by tools that unpack it safely (Frametanium).
+    [[ -d $d ]] && cp -aL "$d/." "$dest/LICENSES/" 2>/dev/null || true
 done
 for l in GPL2 GPL3 LGPL2.1 FDL1.3; do
     [[ -f /usr/share/licenses/common/$l/license.txt ]] && cp -a "/usr/share/licenses/common/$l/license.txt" "$dest/LICENSES/$l.txt" || true

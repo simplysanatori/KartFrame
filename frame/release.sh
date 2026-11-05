@@ -19,7 +19,7 @@
 # is read here. Environment: KARTFRAME_CACHE (default ~/.cache/kartframe).
 set -euo pipefail
 
-VERSION=1.0.0
+VERSION=1.0.1
 NAME=kartframe-$VERSION-linux-arm64
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/.." && pwd)
@@ -81,6 +81,19 @@ install -m 0644 "$here/tools/vrtiming.py" "$here/tools/session-report.py" "$stag
 install -m 0644 "$repo/README.md" "$repo/LICENSE" "$repo/THIRD-PARTY-NOTICES.md" "$stage/"
 install -m 0644 "$repo/docs/RELEASE_NOTES_1.0.0.md" "$repo/docs/CHANGELOG.md" "$repo/docs/TECHNICAL_NOTES.md" "$stage/docs/"
 cp -a "$repo/licenses" "$stage/licenses"
+
+# Tools that unpack the tarball safely (Frametanium) refuse absolute symlinks. A kit made before
+# make-sysroot.sh copied the licence files by content holds one (sysroot/LICENSES/RUNTIME.LIBRARY.EXCEPTION
+# -> /usr/share/licenses/gcc-libs/...). Replace each with a copy of the file it points to. kit.sha256 and
+# kit.json are not touched: the kit's fingerprint is a hash of those two files, and verify_kit skips the
+# symlink lines of the manifest, so the kit keeps its fingerprint and nobody has to redo the disc setup.
+while IFS= read -r -d '' l; do
+    [[ -f $l ]] || fail "absolute symlink in the release that does not point to a file here: ${l#"$stage"/} -> $(readlink "$l")"
+    t=$(mktemp "$stage/.link.XXXXXX"); cp -L "$l" "$t"; chmod 0644 "$t"
+    mv -f "$t" "$l"
+done < <(find "$stage" -type l -lname '/*' -print0)
+bad=$(find "$stage" -type l -lname '/*' -printf '%P -> %l\n' | head -n 3)
+[[ -z $bad ]] || fail "absolute symlinks in the release: $bad"
 
 echo "release: packing"
 # Fixed order, owner and times, so the same inputs make the same tarball.
