@@ -428,4 +428,4 @@ third-party code is listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Support
 
-If you would like more Steam Frame ports, you can [buy me a coffee](https://ko-fi.com/sana748653). It pays for the Claude API credits these ports are built with, spent as carefully as I can. The credit for the games themselves belongs to the upstream projects named above.
+If you would like more Steam Frame ports, you can [buy me a coffee](https://ko-fi.com/sana748653). The credit for the games themselves belongs to the upstream projects named above.
