@@ -14,7 +14,7 @@ resolution_multiplier = 1.0
 enabled = true
 required = false
 # 1.0 renders the eyes at the size SteamVR's resolutionOverride (1728, set by the launch wrapper) asks for;
-# 1.25 is the panel's own 2160 per eye (more GPU time a frame; see the README's settings).
+# 1.25 is the panel's own 2160 per eye (more GPU time a frame; see Settings in docs/USER_GUIDE.md).
 render_scale = 1.000000
 # 1 = render at the headset's refresh rate (90 Hz by default), interpolated from the game's 60 fps.
 frame_interpolation_fps = 1

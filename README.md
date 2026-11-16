@@ -1,29 +1,26 @@
 # KartFrame
 
-Mario Kart Wii in VR, running natively on the Valve Steam Frame.
+Mario Kart Wii in VR on the Valve Steam Frame.
 
-A fork of heurazy's [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS) (v1.3.1). No game data is included; bring your own disc.
+Based on heurazy's [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS) v1.3.1.
 
 ## Features
 
 - 90 Hz, 1728 pixels per eye, 60 game frames a second
 - Frame controller layout, with rumble
-- Hand steering on the cockpit wheel
+- Grip the cockpit wheel to steer by hand
 - Held item, swing to throw, 3D ghost
-- No Lepton, APK or adb needed
 
 ## How it works
 
-- The game runs on the Frame itself as a Linux program, inside SteamVR.
-- You supply the disc image. A one time setup builds the game from it.
-- Nothing is streamed from a PC.
+- The game runs on the Frame itself, in SteamVR. Nothing is streamed from a PC.
+- A one-time setup builds the game from your disc image.
 
 ## Requirements
 
-- A Steam Frame with SteamVR. Steam running while you install.
-- About 1 GB free, plus room for the extracted disc.
+- A Steam Frame with SteamVR, and about 1 GB free plus room for the extracted disc.
 - Your own clean PAL Mario Kart Wii disc image (RMCP01).
-- A terminal on the Frame: SSH, or Konsole from desktop mode.
+- A terminal on the Frame: SSH, or Konsole in desktop mode.
 
 ## Install
 
@@ -41,7 +38,7 @@ A fork of heurazy's [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled
    frame/install.sh ~/Downloads/kartframe-1.0.1-linux-arm64.tar.gz
    ```
 
-3. Build the game from your disc (once, about 6 minutes):
+3. Build the game from your disc (about 6 minutes):
 
    ```sh
    ~/Games/KartFrame/app/setup.sh /path/to/MarioKartWii.iso
@@ -54,9 +51,8 @@ Other installers (then run step 3 yourself):
 
 ## First run
 
-1. Put the headset on and launch **KartFrame** from your Steam library.
+1. Launch **KartFrame** from your Steam library.
 2. In menus, point with a controller and press the trigger or **A**.
-3. Hold left **View** for half a second for the VR settings panel.
 
 ## Controls
 
@@ -73,8 +69,6 @@ Other installers (then run step 3 yourself):
 | Right **Menu** | Start |
 | Left **View**, held | VR settings panel |
 
-In the cockpit, grip the wheel to steer by hand. Full list: [user guide](docs/USER_GUIDE.md#controls).
-
 ## Update
 
 Download the new tarball, then in the `KartFrame` folder run:
@@ -88,20 +82,18 @@ If the game then reports a kit mismatch, run `setup.sh` again.
 
 ## Uninstall
 
-Add `--purge` to also delete your data folder:
-
 ```sh
 ~/Games/KartFrame/app/tools/uninstall.sh
 ```
 
+Add `--purge` to also delete your saves, settings and game files.
+
 ## Troubleshooting
 
-- **Debugging port not reachable:** start Steam, run `install.sh` again.
+- **Steam's debugging port is not reachable:** start Steam, run `install.sh` again.
 - **Game won't start:** read `~/.local/share/KartFrame/sessions/latest/launch.log`.
 - **Disc files not found:** run `~/Games/KartFrame/app/setup.sh status`.
 - **Motion is uneven:** close the VR settings panel and other heavy apps.
-
-More fixes: [user guide](docs/USER_GUIDE.md#troubleshooting).
 
 ## Reporting a problem
 
@@ -113,30 +105,30 @@ It saves `kartframe-logs-<date-time>.tar.gz` in your home folder, with personal 
 
 ## More
 
-- [User guide](docs/USER_GUIDE.md)
+- [User guide](docs/USER_GUIDE.md): all controls, settings and fixes
 - [AGENTS.md](AGENTS.md): for developers and AI agents
 - [Building from source](docs/TECHNICAL_NOTES.md#building)
 - [Changelog](docs/CHANGELOG.md)
 
 ## Support
 
-Support heurazy's [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS) first: star it, report bugs there, send game fixes upstream.
+Star heurazy's [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS) and send game fixes upstream.
 
 For more Steam Frame ports, [buy me a coffee](https://ko-fi.com/sana748653).
 
 ## Credits
 
-- heurazy: [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS) and the [Mario Kart Wii VR port](https://github.com/heurazy/mario-kart-wii-VR-port), the base.
+- [simplysanatori](https://github.com/simplysanatori): built KartFrame.
+- heurazy: [Wiicompiled VR PLUS](https://github.com/heurazy/Wiicompiled_VR-PLUS), the base.
 - iChris4: [Wiicompiled VR](https://github.com/iChris4/Wiicompiled_VR), the OpenXR port and translator.
 - [SteamGridDB](https://www.steamgriddb.com/) artists: library art.
-
-Built by [simplysanatori](https://github.com/simplysanatori). Libraries and tools: [full credits](AGENTS.md#credits-in-full).
-
-Mario Kart Wii, Nintendo and their logos are trademarks of Nintendo. This is an unofficial fan project. It is not affiliated with or endorsed by Nintendo, Valve or the upstream author.
+- Libraries and tools: [full credits](AGENTS.md#credits-in-full).
 
 ## Licence
 
-GPLv3, as upstream: [LICENSE](LICENSE). Third-party licences: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+GPLv3, as upstream ([LICENSE](LICENSE)); third-party licences in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+Mario Kart Wii, Nintendo and their logos are trademarks of Nintendo. This is an unofficial fan project, not affiliated with or endorsed by Nintendo, Valve or the upstream author.
 
 ## How this was made
 

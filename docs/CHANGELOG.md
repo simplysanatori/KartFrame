@@ -54,7 +54,7 @@ The first release of KartFrame: Mario Kart Wii VR as a native Arm64 Linux progra
 ## 0.9.0-alpha.1 (October 2026), pre-release
 
 The first public build of the native port. Everything below has been played on a Steam Frame unless marked
-otherwise. One known issue remains open, the double image in races (see the README); this build carries
+otherwise. One known issue remains open, the double image in races (see the [technical notes](TECHNICAL_NOTES.md#the-double-image-what-twenty-sessions-found)); this build carries
 the mitigation that removes it.
 
 ### What works
@@ -83,5 +83,5 @@ the mitigation that removes it.
 
 ### Known issues
 
-- The double image in races: see the README. This build removes it by timing the hand-over; the right eye still runs one set ahead of the left, which reads as extra sensitivity to head movement.
+- The double image in races: see the [technical notes](TECHNICAL_NOTES.md#the-double-image-what-twenty-sessions-found). This build removes it by timing the hand-over; the right eye still runs one set ahead of the left, which reads as extra sensitivity to head movement.
 - The Time Trial ghost is flat. Full-view 2D effects (Blooper ink) do not cover the whole view. The laser pointer's dot is not visible on the 2D menu screen.

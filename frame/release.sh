@@ -12,7 +12,7 @@
 #
 # The tarball has no top level folder: kit/, toolchain/, translator/, setup.sh, kartframe.sh,
 # install.sh, uninstall.sh, collect-logs.sh, steam-cef.py, art/ (art.py, logo, icon, set/), frame-controller-models.py,
-# Config.frame.toml, tools/{vrtiming.py,session-report.py}, README.md, docs/, LICENSE,
+# Config.frame.toml, tools/{vrtiming.py,session-report.py}, README.md, AGENTS.md, docs/, LICENSE,
 # THIRD-PARTY-NOTICES.md, licenses/. frame/install.sh unpacks it into the program folder.
 # Then frame/boundary-check.sh and frame/tools/privacy-check.sh run on the tarball itself, and the
 # sha256 is written beside it. Any failure removes the tarball again. Nothing from the game's disc
@@ -43,7 +43,7 @@ done
 [[ -x $tr/Translator.Cli ]] || fail "no executable Translator.Cli in $tr (frame/publish-translator.sh)"
 [[ -x $tc/toolchain-aarch64/bin/clang || -f $tc/toolchain-aarch64.tar.xz ]] ||
     fail "no toolchain-aarch64/ or toolchain-aarch64.tar.xz in $tc (frame/toolchain.sh <dir>)"
-for f in README.md LICENSE THIRD-PARTY-NOTICES.md docs/RELEASE_NOTES_1.0.0.md docs/CHANGELOG.md docs/TECHNICAL_NOTES.md \
+for f in README.md AGENTS.md LICENSE THIRD-PARTY-NOTICES.md docs/RELEASE_NOTES_1.0.0.md docs/CHANGELOG.md docs/TECHNICAL_NOTES.md docs/USER_GUIDE.md \
          frame/setup.sh frame/kartframe.sh frame/install.sh frame/uninstall.sh frame/collect-logs.sh frame/steam-cef.py \
          frame/frame-controller-models.py frame/Config.frame.toml frame/art/art.py frame/art/logo.png frame/art/icon-512.png frame/art/CREDITS.md frame/art/set/p.png frame/art/set/wide.png frame/art/set/hero.png frame/tools/vrtiming.py frame/tools/session-report.py \
          frame/boundary-check.sh frame/release-allowlist.txt frame/tools/privacy-check.sh; do
@@ -78,8 +78,8 @@ install -m 0755 "$here/art/art.py" "$stage/art/art.py"
 install -m 0644 "$here/art/logo.png" "$here/art/icon-512.png" "$here/art/CREDITS.md" "$stage/art/"
 install -m 0644 "$here"/art/set/*.png "$stage/art/set/"
 install -m 0644 "$here/tools/vrtiming.py" "$here/tools/session-report.py" "$stage/tools/"
-install -m 0644 "$repo/README.md" "$repo/LICENSE" "$repo/THIRD-PARTY-NOTICES.md" "$stage/"
-install -m 0644 "$repo/docs/RELEASE_NOTES_1.0.0.md" "$repo/docs/CHANGELOG.md" "$repo/docs/TECHNICAL_NOTES.md" "$stage/docs/"
+install -m 0644 "$repo/README.md" "$repo/AGENTS.md" "$repo/LICENSE" "$repo/THIRD-PARTY-NOTICES.md" "$stage/"
+install -m 0644 "$repo/docs/RELEASE_NOTES_1.0.0.md" "$repo/docs/CHANGELOG.md" "$repo/docs/TECHNICAL_NOTES.md" "$repo/docs/USER_GUIDE.md" "$stage/docs/"
 cp -a "$repo/licenses" "$stage/licenses"
 
 # Tools that unpack the tarball safely (Frametanium) refuse absolute symlinks. A kit made before
