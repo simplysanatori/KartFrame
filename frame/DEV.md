@@ -324,3 +324,10 @@ Details and numbers: frame/perf/LANE_AJ.md.
 KARTFRAME_WORKER_LOCK=full|narrow (default full) sets how much of a refresh set the frame worker runs under the renderer
 mutex; the `cpulog:` line ends with the lock-wait and worker-hold fields. Lock map, audit, fields and mock A/B:
 frame/perf/LANE_AK.md. Headset comparison: frame/perf/session-h25/README.md.
+
+## Crash reports
+After a crash the wrapper runs `frame/tools/crash-report.py prepare` into `$KARTFRAME_HOME/crash-report/`; the next VR start
+asks (`runtime/src/vr/crash_prompt.inl`) and the wrapper sends on "send". KARTFRAME_SENTRY_TEST_CRASH=1 (session.env) crashes
+the game 5 s after start. The DSN: KARTFRAME_SENTRY_DSN or `~/.config/kartframe-dev/sentry-dsn` on this machine (never in the
+repo; `frame/release.sh` puts it in the tarball). Symbols: `frame/upload-symbols.sh <kartframe>`. Test without a network:
+`python3 frame/tools/crash-report-test.py`. Details: docs/TECHNICAL_NOTES.md, Crash reports.

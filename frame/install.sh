@@ -112,7 +112,9 @@ mkdir -p "$KFHOME/UserData"
 [ -f "$KFHOME/UserData/Config.toml" ] || sed "s|@DVD_ROOT@|$KFHOME/game/DATA|" "$HERE/Config.frame.toml" > "$KFHOME/UserData/Config.toml"
 cp "$HERE/kartframe.sh" "$APP/kartframe.sh"
 cp "$HERE/Config.frame.toml" "$APP/Config.frame.toml"
-for t in vrtiming.py session-report.py; do cp "$HERE/tools/$t" "$APP/tools/$t"; done
+for t in vrtiming.py session-report.py crash-report.py; do cp "$HERE/tools/$t" "$APP/tools/$t"; done
+# A development install has no VERSION: crash reports name the commit it was built from instead.
+[ -f "$APP/VERSION" ] || git -C "$REPO" rev-parse --short HEAD > "$APP/tools/build-commit" 2> /dev/null || rm -f "$APP/tools/build-commit"
 cp "$HERE/steam-cef.py" "$APP/tools/steam-cef.py"
 chmod +x "$APP/kartframe.sh" "$APP/tools/steam-cef.py"
 for f in collect-logs.sh uninstall.sh; do cp "$HERE/$f" "$APP/tools/$f" 2> /dev/null && chmod +x "$APP/tools/$f"; done

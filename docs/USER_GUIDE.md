@@ -123,6 +123,7 @@ Switches for testing go in `~/.local/share/KartFrame/session.env`, one `NAME=val
 | `KARTFRAME_RESIDENT_GEOMETRY` | `1` caches display lists on the GPU (off by default; about 2 % less GPU time) |
 | `KARTFRAME_CPULOG` | `1` logs one `cpulog:` line a second (game CPU, run-queue wait, lock waits, core clocks); `thermal.tsv` is always written |
 | `KARTFRAME_VRTIMING_FRAMES` | 1 logs every compositor frame to `vrframes.log` in the session folder |
+| `KARTFRAME_SENTRY_TEST_CRASH` | `1` makes the game crash 5 seconds after it starts, to try [crash reports](#crash-reports). Add `KARTFRAME_SESSION_ENV_ONCE=1` so only one launch crashes |
 | `KARTFRAME_HOME` | The data folder, if it is not `~/.local/share/KartFrame` |
 
 ## Performance
@@ -153,6 +154,7 @@ How the build paces frames is in [AGENTS.md](../AGENTS.md#performance-internals)
 | Session logs | `~/.local/share/KartFrame/sessions/<date-time>/` (`launch.log`, `stdout.log`, `game.log`, `vrtiming.log`, `report.txt`); `sessions/latest` points at the newest |
 | Downloaded tools | `~/.cache/kartframe` (nodtool, fetched by `setup.sh`) |
 | One launch's test settings | `~/.local/share/KartFrame/session.env` |
+| A crash report waiting for your answer | `~/.local/share/KartFrame/crash-report/` |
 
 The game does not write to `~/.local/share/WiiCompiled`.
 
@@ -174,3 +176,15 @@ Open an [issue](https://github.com/simplysanatori/KartFrame/issues) with what yo
 ```
 
 It gathers the newest session's logs into one archive, `kartframe-logs-<date-time>.tar.gz` in your home folder, and masks IP and MAC addresses, host names, network names, serial numbers, Steam ids, email addresses and user names in paths. The masking is a best effort. Read the files before you attach them.
+
+## Crash reports
+
+If KartFrame crashes, it asks you about it the next time you start it in VR, before anything else:
+
+- **Don't Send** deletes the report. Nothing is sent.
+- **See What's Sent** shows the whole report, exactly as it would be sent.
+- **Send Report** sends it to me through [Sentry](https://sentry.io), a crash reporting service, so I'm notified and can work on it. It only sends when you choose it, and only that one report.
+
+A report holds what happened (the crash, or the fatal error the game reported), KartFrame's version, SteamOS's version, your graphics chip and driver, the refresh rate, eye size and race camera, the stack (memory addresses and the names of the program's files, with their build IDs), the game's crash file, the last 2,000 lines of the game's log and the launch log. Your home folder is shown as `~`, your user name as `<user>` and your computer's name as `<host>`; IP and MAC addresses, email addresses and Steam ids are removed. The report holds no account. Sentry sees the address a report comes from, like any website does; the report asks it not to keep it, and I've set the project not to store IP addresses.
+
+KartFrame sends nothing in the background. If sending fails (no network, for example), the report is kept and you're asked again at the next start. A build without a crash reporting address has no Send Report; the question then points you to `collect-logs.sh` above.

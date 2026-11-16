@@ -41,8 +41,9 @@
 #                           processes, runnable threads; once a second)
 #   KARTFRAME_SESSION_ENV_ONCE=1   (inside session.env) delete session.env after this launch
 #   KARTFRAME_KEEP_SESSIONS number of session folders kept (default 30)
+#   KARTFRAME_SENTRY_TEST_CRASH=1  (test) the game crashes 5 s after start, to try the crash report
 # Test hooks: KARTFRAME_VRCMD, KARTFRAME_STEAMVR_DIR, KARTFRAME_VRSETTINGS, KARTFRAME_VRTIMING_PY,
-# KARTFRAME_REPORT_PY, KARTFRAME_EXE.
+# KARTFRAME_REPORT_PY, KARTFRAME_CRASH_PY, KARTFRAME_EXE.
 HERE=$(dirname "$(readlink -f "$0")")
 KFHOME=${KARTFRAME_HOME:-$HOME/.local/share/KartFrame}
 STAMP=$(date +%Y%m%d-%H%M%S)
@@ -65,6 +66,7 @@ if [ -f "$KFHOME/session.env" ]; then
     set -a; . "$KFHOME/session.env"; set +a
     [ "$KARTFRAME_SESSION_ENV_ONCE" = 1 ] && { rm -f "$KFHOME/session.env"; log "session.env deleted (KARTFRAME_SESSION_ENV_ONCE)"; }
 fi
+[ "$KARTFRAME_SENTRY_TEST_CRASH" = 1 ] && { export KARTFRAME_SENTRY_TEST_CRASH; log "KARTFRAME_SENTRY_TEST_CRASH=1: the game crashes 5 s after start (test)"; }
 [ "$KARTFRAME_FDM_LAYER" = 0 ] && { export DISABLE_VULKAN_FDM_INJECTION_LAYER=1; log "A/B: Valve FDM layer disabled"; }
 [ "${KARTFRAME_SYSMEM:-1}" = 1 ] && { export TU_DEBUG=sysmem; log "TU_DEBUG=sysmem (KARTFRAME_SYSMEM=0 turns it off)"; }
 [ -n "$KARTFRAME_PACING" ] && { export KARTFRAME_PACING; log "KARTFRAME_PACING=$KARTFRAME_PACING"; }
@@ -252,6 +254,27 @@ if [ "${KARTFRAME_THERMLOG:-1}" != 0 ]; then
     THERM_PID=$!
 fi
 
+# Crash reports (tools/crash-report.py). After a run that crashed, the report is prepared in
+# $KFHOME/crash-report (below, after the game). At the next start the game asks whether to send it and
+# writes the answer there: "send" sends that one report to Sentry, "dont" deletes it. Nothing is sent
+# without that answer. A send that fails keeps the report, and the game asks again next time.
+CRASH_PY=${KARTFRAME_CRASH_PY:-$HERE/tools/crash-report.py}
+CRASH_DIR=$KFHOME/crash-report
+crash_answer() {
+    [ -f "$CRASH_DIR/answer" ] || return 0
+    if [ "$(head -n 1 "$CRASH_DIR/answer")" = send ]; then
+        if python3 -I "$CRASH_PY" send "$CRASH_DIR" --app "$HERE"; then rm -rf "$CRASH_DIR"
+        else rm -f "$CRASH_DIR/answer"; log "crash report: kept, the game asks again next time"; fi
+    else
+        rm -rf "$CRASH_DIR"; log "crash report: not sent (Don't Send), deleted"
+    fi
+}
+CRASH_WATCH_PID=
+if [ -f "$CRASH_PY" ]; then
+    crash_answer
+    [ -f "$CRASH_DIR/whats-sent.txt" ] && { export KARTFRAME_CRASH_DIR=$CRASH_DIR; log "crash report from an earlier run waiting: the game asks whether to send it"; }
+fi
+
 # Not exec: the wrapper stays to stop the logger and write the report. A signal for the wrapper
 # (Steam stopping the app) goes on to the game.
 # The headset is in use: development builds and headless GPU runs on this machine wait while this
@@ -262,6 +285,11 @@ touch "$SESSION/.start"
 "$EXE" "$@" > "$SESSION/stdout.log" 2>&1 &
 GAME_PID=$!
 echo "kartframe $GAME_PID" > "$HEADSET_MARK" 2> /dev/null
+# The player's answer to the crash question is acted on as soon as the game writes it.
+if [ -n "$KARTFRAME_CRASH_DIR" ]; then
+    ( while kill -0 "$GAME_PID" 2> /dev/null && [ ! -f "$CRASH_DIR/answer" ]; do sleep 1; done; crash_answer ) &
+    CRASH_WATCH_PID=$!
+fi
 # KARTFRAME_RECORD=raw records both panels as scanned out (framecorder; about 1.6 ms of GPU a frame)
 # into the session folder, for questions the logs cannot settle (per-eye ghosting, flicker).
 # The recorder starts 8 s in and only if the game is still there then (it once started after a game
@@ -337,6 +365,16 @@ log "game exited with status $rc"
 GL=$(find "$STATE/Logs" -name console.log -newer "$SESSION/.start" 2> /dev/null | xargs -r ls -t 2> /dev/null | head -1)
 if [ -n "$GL" ]; then cp "$GL" "$SESSION/game.log"; else log "no console.log from this run; the report reads stdout.log"; cp "$SESSION/stdout.log" "$SESSION/game.log"; fi
 rm -f "$SESSION/.start"
+# Crash report: the answer to an earlier one first (a send may still be under way), then this run's,
+# when it crashed (the exit status and the game's crash_*.txt decide; this replaces an unanswered one).
+if [ -f "$CRASH_PY" ]; then
+    [ -n "$CRASH_WATCH_PID" ] && wait "$CRASH_WATCH_PID" 2> /dev/null
+    crash_answer
+    RUN_LOG=$(ls -d "$STATE/Logs"/*_pid"$GAME_PID" 2> /dev/null | head -1)
+    python3 -I "$CRASH_PY" prepare --session "$SESSION" --status "$rc" --run-log "$RUN_LOG" --app "$HERE" \
+        --config "$STATE/Config.toml" --out "$CRASH_DIR"
+    case $? in 0 | 3) ;; *) log "crash-report.py prepare failed" ;; esac
+fi
 REPORT=${KARTFRAME_REPORT_PY:-$HERE/tools/session-report.py}
 if [ -f "$REPORT" ]; then
     set -- "$SESSION/game.log"; [ -s "$SESSION/vrtiming.log" ] && set -- "$@" "$SESSION/vrtiming.log"

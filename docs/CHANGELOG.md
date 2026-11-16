@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Crash reports
+
+- If KartFrame crashes, it asks you about it at the next start in VR: **Don't Send**, **See What's Sent** or **Send Report**.
+- **Send Report** sends that one report to me through Sentry, so I'm notified and can work on it. Nothing is sent unless you choose it, and nothing in the background. Your user name, home folder, computer name and network addresses are removed. Details in the [user guide](USER_GUIDE.md#crash-reports).
+- The game's crash files now hold the stack, and the game has a build ID, so reports can be traced to the code. This needs a new kit, so the disc setup runs again after updating.
+
 ## 1.0.1 (November 2026)
 
 - You can now install and update KartFrame with Frametanium. The release's own `install.sh` installs the unpacked release in place, so Frametanium can run it.

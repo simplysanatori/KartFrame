@@ -43,13 +43,24 @@
 #include <dbghelp.h>
 #else
 #include <signal.h>
-#if defined(__x86_64__)
-// Only the x86 POSIX fault path inspects ucontext_t to recover the page-fault
-// write bit. macOS deprecates ucontext and requires _XOPEN_SOURCE just to
-// include the header, while the arm64 handler does not use it at all.
+#if defined(__linux__) && !defined(__ANDROID__)
+// KartFrame crash reports: the host stack and its modules go into the crash file (desktop Linux only).
+#define KARTFRAME_HOST_STACK 1
+#endif
+#if defined(__x86_64__) || defined(KARTFRAME_HOST_STACK)
+// The x86 POSIX fault path inspects ucontext_t to recover the page-fault
+// write bit, and Linux reads the faulting pc from it for the crash report's
+// stack. macOS deprecates ucontext and requires _XOPEN_SOURCE just to
+// include the header, while its arm64 handler does not use it at all.
 #include <ucontext.h>
 #endif
 #include <unistd.h>
+#if defined(KARTFRAME_HOST_STACK)
+#include <elf.h>
+#include <execinfo.h>
+#include <link.h>
+#include <sys/auxv.h>
+#endif
 #endif
 
 #include "abi_bridge.h"
@@ -176,6 +187,8 @@ std::atomic_bool g_fatalErrorReported{false};
 std::atomic_bool g_fatalPopupShown{false};
 std::atomic<int> g_lastExitCode{0};
 std::atomic_bool g_exitCodeSet{false};
+// The pc of a fatal signal (Linux), where the crash report's stack starts.
+std::atomic<uintptr_t> g_hostFaultPc{0};
 
 struct ProcessTranscriptState {
     bool enabled = false;
@@ -699,6 +712,106 @@ std::string FormatHostStackTrace(unsigned framesToSkip) {
         out << ")\n";
     }
     return out.str();
+#elif defined(KARTFRAME_HOST_STACK)
+    // KartFrame crash reports (frame/tools/crash-report.py): each frame as its address and image offset,
+    // then every image a frame is in with its load address, size and GNU build id, which is what Sentry
+    // needs to name the functions from the uploaded symbols. After a fatal signal the stack starts at the
+    // faulting pc, else after the kernel's signal return trampoline (the vDSO), so the handler's own
+    // frames are left out.
+    struct HostImage {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        std::string path;
+        std::string buildId;
+    };
+    std::vector<HostImage> images;
+    dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) -> int {
+        HostImage image;
+        uintptr_t low = UINTPTR_MAX;
+        uintptr_t high = 0;
+        for (int i = 0; i < info->dlpi_phnum; ++i) {
+            const ElfW(Phdr)& header = info->dlpi_phdr[i];
+            if (header.p_type == PT_LOAD) {
+                low = std::min<uintptr_t>(low, header.p_vaddr);
+                high = std::max<uintptr_t>(high, header.p_vaddr + header.p_memsz);
+            } else if (header.p_type == PT_NOTE && image.buildId.empty()) {
+                const char* note = reinterpret_cast<const char*>(info->dlpi_addr + header.p_vaddr);
+                const char* const notesEnd = note + header.p_memsz;
+                while (note + sizeof(ElfW(Nhdr)) <= notesEnd) {
+                    const auto* nhdr = reinterpret_cast<const ElfW(Nhdr)*>(note);
+                    const char* name = note + sizeof(ElfW(Nhdr));
+                    const unsigned char* desc =
+                        reinterpret_cast<const unsigned char*>(name + ((nhdr->n_namesz + 3u) & ~3u));
+                    if (nhdr->n_type == NT_GNU_BUILD_ID && nhdr->n_namesz == 4 && std::memcmp(name, "GNU", 4) == 0) {
+                        static constexpr char kHex[] = "0123456789abcdef";
+                        for (uint32_t b = 0; b < nhdr->n_descsz; ++b) {
+                            image.buildId += kHex[desc[b] >> 4];
+                            image.buildId += kHex[desc[b] & 15];
+                        }
+                        break;
+                    }
+                    note = reinterpret_cast<const char*>(desc) + ((nhdr->n_descsz + 3u) & ~3u);
+                }
+            }
+        }
+        if (high == 0) {
+            return 0;
+        }
+        image.start = info->dlpi_addr + low;
+        image.end = info->dlpi_addr + high;
+        image.path = info->dlpi_name != nullptr ? info->dlpi_name : "";
+        static_cast<std::vector<HostImage>*>(data)->push_back(std::move(image));
+        return 0;
+    }, &images);
+    if (!images.empty() && images.front().path.empty()) {
+        std::error_code ec;
+        images.front().path = std::filesystem::read_symlink("/proc/self/exe", ec).string();
+    }
+    const uintptr_t vdso = static_cast<uintptr_t>(getauxval(AT_SYSINFO_EHDR));
+    const auto imageOf = [&](uintptr_t address) -> const HostImage* {
+        for (const HostImage& image : images) {
+            if (address >= image.start && address < image.end) return &image;
+        }
+        return nullptr;
+    };
+
+    void* frames[64]{};
+    const int captured = backtrace(frames, static_cast<int>(std::size(frames)));
+    std::ostringstream out;
+    if (captured <= 0) {
+        out << "[runtime] host stack trace unavailable (backtrace returned nothing)\n";
+        return out.str();
+    }
+    int first = std::min<int>(static_cast<int>(framesToSkip) + 1, captured);
+    const uintptr_t faultPc = g_hostFaultPc.load(std::memory_order_acquire);
+    for (int i = 0; i < captured; ++i) {
+        const uintptr_t address = reinterpret_cast<uintptr_t>(frames[i]);
+        const HostImage* image = imageOf(address);
+        if ((faultPc != 0 && address == faultPc) || (image != nullptr && vdso != 0 && image->start == vdso)) {
+            first = (faultPc != 0 && address == faultPc) ? i : std::min(i + 1, captured - 1);
+            break;
+        }
+    }
+    std::vector<const HostImage*> used;
+    out << "[runtime] host stack trace (most recent call first):\n";
+    for (int i = first; i < captured; ++i) {
+        const uintptr_t address = reinterpret_cast<uintptr_t>(frames[i]);
+        const HostImage* image = imageOf(address);
+        out << "  #" << std::setw(2) << std::setfill('0') << (i - first) << std::setfill(' ') << " pc 0x" << std::hex
+            << address;
+        if (image != nullptr) {
+            const std::string& path = image->path;
+            out << ' ' << path.substr(path.find_last_of('/') + 1) << "+0x" << (address - image->start);
+            if (std::find(used.begin(), used.end(), image) == used.end()) used.push_back(image);
+        }
+        out << std::dec << '\n';
+    }
+    out << "[runtime] host images:\n";
+    for (const HostImage* image : used) {
+        out << "  image 0x" << std::hex << image->start << " 0x" << (image->end - image->start) << std::dec << ' '
+            << (image->buildId.empty() ? "-" : image->buildId) << ' ' << image->path << '\n';
+    }
+    return out.str();
 #else
     (void)framesToSkip;
     return {};
@@ -743,6 +856,9 @@ void WriteFatalLogImpl(std::string_view reason, std::string_view extraDetails = 
     } else {
         out << "[runtime] CPU context unavailable." << std::endl;
     }
+#if defined(KARTFRAME_HOST_STACK)
+    out << FormatHostStackTrace(1);
+#endif
 
     // Guest memory snapshots so the heap/object state can be walked offline.
     // Written once per process: several fatal paths can fire in sequence
@@ -1217,6 +1333,20 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     if (s_inCrashHandler.test_and_set()) {
         std::_Exit(EXIT_FAILURE);
     }
+#if defined(KARTFRAME_HOST_STACK)
+    // Reporting is not async-signal-safe (streams, the stack walk); a report that hangs on a lock the
+    // crashed thread held ends the process 10 s later instead of freezing the headset.
+    signal(SIGALRM, SIG_DFL);
+    alarm(10);
+    if (ucontextVoid != nullptr) {
+        const auto* uc = static_cast<const ucontext_t*>(ucontextVoid);
+#if defined(__aarch64__)
+        g_hostFaultPc.store(static_cast<uintptr_t>(uc->uc_mcontext.pc), std::memory_order_release);
+#elif defined(__x86_64__)
+        g_hostFaultPc.store(static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]), std::memory_order_release);
+#endif
+    }
+#endif
 
     ReportUnhandledSignalFault(sig, faultAddress);
     std::ostringstream popupDetails;
@@ -1252,7 +1382,32 @@ void InstallPosixMemoryFaultHandler() {
     // SIGSEGV on Linux; region sizing should make this unreachable, but routing it to the same
     // handler costs nothing and avoids a silent gap if it ever isn't.
     sigaction(SIGBUS, &action, nullptr);
+#if defined(KARTFRAME_HOST_STACK)
+    // The first backtrace() loads libgcc_s's unwinder; do it now, never inside a signal handler.
+    void* warmUp[2];
+    (void)backtrace(warmUp, 2);
+#endif
 }
+
+#if defined(KARTFRAME_HOST_STACK)
+// KARTFRAME_SENTRY_TEST_CRASH=1 (test only, session.env): a real SIGSEGV 5 s after start, so the crash
+// report, the question at the next start and Send Report can be tried. The log names it.
+void StartSentryTestCrash() {
+    const char* value = std::getenv("KARTFRAME_SENTRY_TEST_CRASH");
+    if (value == nullptr || value[0] != '1') {
+        return;
+    }
+    RT_LOG(RT_TAG_RUNTIME) << "KARTFRAME_SENTRY_TEST_CRASH: crashing in 5 s" << std::endl;
+    std::thread([] {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        RT_LOG(RT_TAG_RUNTIME) << "Sentry test error " << now << " (KARTFRAME_SENTRY_TEST_CRASH)" << std::endl;
+        volatile uintptr_t address = 8;
+        *reinterpret_cast<volatile int*>(address) = 1;
+    }).detach();
+}
+#endif
 #endif
 
 void AbortSignalHandler(int signum) {
@@ -1260,6 +1415,10 @@ void AbortSignalHandler(int signum) {
     if (g_abortSignalHandled.test_and_set()) {
         std::_Exit(EXIT_FAILURE);
     }
+#if defined(KARTFRAME_HOST_STACK)
+    signal(SIGALRM, SIG_DFL);
+    alarm(10);
+#endif
 
     // abort() bypasses atexit, so the guest-memory fault summary has to be
     // emitted here too. It is idempotent, so a later AtExitHandler is a no-op.
@@ -1343,11 +1502,14 @@ static void TerminateHandler() {
         terminateDetails = "std::terminate() without current exception.";
     }
     ShowRuntimeFatalPopup("an unhandled C++ exception occurred", terminateDetails);
+#if defined(_WIN32)
+    // On Linux WriteFatalLogImpl writes the stack itself.
     const std::string hostStackSummary = FormatHostStackTrace(1);
     if (!hostStackSummary.empty()) {
         terminateDetails.append("\n");
         terminateDetails.append(hostStackSummary);
     }
+#endif
     WriteFatalLogImpl("terminate", terminateDetails);
     RT_LOG(RT_TAG_RUNTIME) << "std::terminate() called - program exiting" << std::endl;
     std::cerr.flush();
@@ -1457,6 +1619,9 @@ int RuntimeMain(int argc, char** argv) {
     InstallPosixMemoryFaultHandler();
 #endif
     InitializeProcessTranscript(argc, argv);
+#if defined(KARTFRAME_HOST_STACK)
+    StartSentryTestCrash();
+#endif
     std::signal(SIGABRT, AbortSignalHandler);
     // Install exit/terminate handlers to ensure we get crash info
     std::atexit(AtExitHandler);

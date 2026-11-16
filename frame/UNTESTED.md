@@ -40,3 +40,11 @@ What is left:
 - Updating from 0.9.0-alpha.1 (new kit, so `setup.sh` runs again).
 - setup.sh from the release tarball on a clean Frame, start to finish, by someone other than the owner.
 - uninstall.sh on a real install.
+
+## Crash reports
+
+- Not compiled or run on Linux yet: the host stack in the crash files (`backtrace`, build ids, starting at the
+  faulting pc), the build id link flag through a new kit, the crash question panel in VR, and the wrapper's
+  prepare, watch and send steps. Only `frame/tools/crash-report-test.py` has run (classification, scrubbing, the
+  envelope to a local stand-in), and one test envelope was accepted by the real Sentry project.
+- Sentry naming the functions from `frame/upload-symbols.sh` for a player's build (same build id as the owner's?).

@@ -55,6 +55,7 @@ extern "C" void func_80554E14(CpuContext* context);
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <cstdlib>
 #include <limits>
@@ -2367,6 +2368,7 @@ ImGuiContext* CreateVrSettingsPanelContext() {
     return context;
 }
 
+#include "vr/crash_prompt.inl"
 #include "vr/onboarding_overlay.inl"
 
 void DrawVrSettingsPanelWindow() {

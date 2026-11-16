@@ -330,6 +330,10 @@ function(mkw_configure_product target)
         # here for the same reason: music_attenuation.cpp's dlopen(libdbus-1) lives in those
         # objects (empty string on glibc >= 2.34, where dl* is in libc).
         target_link_libraries(${target} PRIVATE mkw::libco ${CMAKE_DL_LIBS})
+        # A GNU build id (a hash of the linked file, so the build stays reproducible): crash reports name
+        # it, and Sentry matches it to the symbols frame/upload-symbols.sh uploaded. The kit's link recipe
+        # carries the flag, so the first-run build on a player's Frame has one too.
+        target_link_options(${target} PRIVATE "-Wl,--build-id=sha1")
     elseif(MKW_PLATFORM_ANDROID)
         target_link_libraries(${target} PRIVATE mkw::libco android log vulkan ${CMAKE_DL_LIBS})
         # A shared library's own calls and data references go through the PLT and GOT unless the

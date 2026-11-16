@@ -7,4 +7,5 @@
 ^frame/test-installer\.sh$	\$W/home/
 ^Launcher/prepare-portable-tools\.sh$	.*
 ^toolchain/	.*
+^tools/sentry-dsn$	.*
 ^translator/	.*

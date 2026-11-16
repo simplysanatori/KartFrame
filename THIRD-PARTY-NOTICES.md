@@ -266,7 +266,13 @@ source for the glibc and GCC parts is available from the upstream projects at th
 in `sysroot/LICENSES`, and this project will supply it on request for the exact version shipped.
 
 Test tools in `frame/tools` (`xrmock`, `xrprobe`) are not part of the game. `xrprobe` is GPLv3
-(`frame/tools/xrprobe/LICENSE`). The release tarball carries only `vrtiming.py` and `session-report.py`.
+(`frame/tools/xrprobe/LICENSE`). The release tarball carries only `vrtiming.py`, `session-report.py` and
+`crash-report.py`.
+
+Crash reports the player chooses to send go to [Sentry](https://sentry.io), a hosted service of
+Functional Software, Inc. (Sentry's terms and privacy policy apply to what it receives). No Sentry code
+is bundled: `frame/tools/crash-report.py` writes Sentry's documented envelope format with Python's
+standard library. See [docs/USER_GUIDE.md](docs/USER_GUIDE.md#crash-reports).
 
 Valve's Steam Frame controller models are read from the user's own SteamVR install at install time,
 simplified and written to the user's data folder. They are never copied into the repository or a

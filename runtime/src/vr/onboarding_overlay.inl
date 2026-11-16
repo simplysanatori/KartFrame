@@ -3,7 +3,7 @@
 mkw::vr::TutorialFlow g_tutorial;
 mkw::vr::SettingsPauseFlow g_settingsPause;
 std::string g_onboardingError;
-int g_introductionKind=0; // 0 settings, 1 welcome, 2/3 control guides
+int g_introductionKind=0; // 0 settings, 1 welcome, 2/3 control guides, 4 crash report (crash_prompt.inl)
 struct TutorialInput {
     bool steamvr=false,remote=false,active=false,reverse=false,trick=false,confirm=false,brake=false;
     float steering_x=0,item=0,accelerate=0;
@@ -248,7 +248,9 @@ void UpdateIntroduction() {
         mkw::vr::MkwVRPolicySetSettingsVisible(false);
         return;
     }
-    if (!RuntimeConfigFile::Get().vrWelcomeComplete) {
+    if (CrashPromptPending()) {
+        g_introductionKind=4;
+    } else if (!RuntimeConfigFile::Get().vrWelcomeComplete) {
         g_introductionKind=1;
     } else {
         const auto policy=mkw::vr::MkwVRPolicyGetSnapshot();
@@ -269,7 +271,10 @@ void DrawIntroductionWindow() {
     const auto* viewport=ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->Pos);ImGui::SetNextWindowSize(viewport->Size);
     if (ImGui::Begin("VR introduction",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings)) {
-        if (g_introductionKind==1) {
+        if (g_introductionKind==4) {
+            DrawCrashPrompt();
+            if(!CrashPromptPending()) g_introductionKind=0;
+        } else if (g_introductionKind==1) {
             ImGui::TextUnformatted("Welcome to Mario Kart Wii VR");ImGui::Separator();
             ImGui::TextWrapped("Choose your default race camera. Aim either controller and pull its trigger to select. You can change this later in VR settings.");
             int choice=RuntimeConfigFile::Get().vrDefaultCamera;

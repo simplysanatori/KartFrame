@@ -50,6 +50,10 @@ See the [technical notes](docs/TECHNICAL_NOTES.md#building). The patched Dawn is
 
 The user-facing list is in the [user guide](docs/USER_GUIDE.md#reporting-a-problem). The script's header (`frame/collect-logs.sh`) has the exact list, which also covers UUIDs, tokens and certificate and key blocks. The archive goes to `$KARTFRAME_LOG_DIR`, or the home folder.
 
+## Crash reports
+
+Opt-in per report: after a crash the next VR start asks Don't Send, See What's Sent or Send Report, and only Send Report sends that one report to Sentry. The design, the DSN (never in the repository: `KARTFRAME_SENTRY_DSN` or `~/.config/kartframe-dev/sentry-dsn` on the build machine) and the symbol upload are in the [technical notes](docs/TECHNICAL_NOTES.md#crash-reports).
+
 ## Credits in full
 
 - Built by [simplysanatori](https://github.com/simplysanatori).
